@@ -1,0 +1,40 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Local/editor files
+.DS_Store
+.vscode/
+.idea/
+.agents/
+.codex/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Experiment artifacts and large runtime outputs
+artifacts/
+unlearning-artifacts/
+outputs/
+runs/
+checkpoints/
+*.pt
+*.pth
+*.ckpt
+*.pkl
+
+# Raw network captures should stay in Drive or external storage
+*.pcap
+*.cap
+
+# Archives generated during experiments
+*.zip
+*.tar
+*.tar.gz
+*.tgz
