@@ -11,7 +11,7 @@ Raw network flow / PCAP
 Packet parser + preprocessing
         |
         v
-Tensor packet features [MAX_PACKETS, 5]
+Tensor packet features [MAX_PACKETS, 3]
         |
         v
 CNN encoder
@@ -58,7 +58,7 @@ Bài toán hiện tại:
 - MLP phân loại binary thành `known` hoặc `unknown`.
 - Sau khi classifier ổn định, áp dụng instance-wise unlearning để quên một tập mẫu `Df` nhưng vẫn giữ hiệu năng trên `Dr`.
 
-Đây là bài toán open-world: model được train với một số nhãn `known` và một số nhãn `unknown-train`, sau đó test thêm các nhãn `holdout unknown` chưa xuất hiện trong train.
+Đây là bài toán open-world/binary detection theo hướng hiện tại: encoder SupCon được pretrain chỉ trên một số nhãn `known`, sau đó encoder bị freeze; MLP binary mới được train với `known` và các nhãn còn lại được gán `unknown`.
 
 ## 2. Cấu trúc workspace
 
@@ -70,6 +70,9 @@ unlearning/
 │   ├── Instance-Wise Unlearning.md
 │   ├── Chundawat et al. - 2023 - Zero-Shot Machine Unlearning.pdf
 │   └── zero retrain.pdf
+├── scripts/
+│   ├── colab_sync_project.sh
+│   └── colab_run_notebook.sh
 └── MLP-Classfication/
     ├── plan.md
     ├── results.md
@@ -89,12 +92,14 @@ unlearning/
 - `paper/Instance-Wise Unlearning.md`: bản viết lại ngắn gọn bằng tiếng Việt từ paper chính.
 - `MLP-Classfication/plan.md`: mô tả bài toán, giả định, pipeline, known/unknown, Df/Dr và hướng đánh giá.
 - `MLP-Classfication/results.md`: báo cáo kết quả chạy hiện tại, gồm môi trường, dataset, cấu hình, metric validation/test, nhận xét và kết luận.
-- `MLP-Classfication/code/train_pipeline.ipynb`: notebook chính để chạy trên Google Colab.
+- `MLP-Classfication/code/train_pipeline.ipynb`: notebook chính, chạy được trong VS Code/local hoặc Google Colab.
 - `MLP-Classfication/code/CHI.md`: danh sách overview của từng code cell; cần cập nhật khi thêm/xóa/sửa cell.
 - `MLP-Classfication/train_pipeline.py`: bản CLI tương ứng với notebook.
 - `MLP-Classfication/code/export_notebook_outputs.py`: xuất output của notebook sang Markdown để AI/người đọc nhanh.
 - `MLP-Classfication/code/RUN_LOG.md`: log notebook đã export gần nhất.
 - `MLP-Classfication/code/supcon-model.ipynb`: notebook cũ để tham khảo hướng SupCon/embedding.
+- `scripts/colab_sync_project.sh`: đóng gói project local, upload lên Colab VM và giải nén thành folder remote.
+- `scripts/colab_run_notebook.sh`: chạy notebook chính trong folder remote trên Colab bằng Colab CLI.
 
 ## 3. Dữ liệu Google Drive
 
@@ -180,42 +185,49 @@ Input gốc là PCAP. Parser đọc packet IPv4/IPv6 bằng Scapy và lấy các
 
 - timestamp tương đối;
 - hướng packet;
-- source port;
-- destination port;
 - packet size.
 
-Mỗi packet được chuyển thành 5 đặc trưng:
+Mỗi packet được chuyển thành 3 đặc trưng theo hướng `RawPacketEncoder` trong `supcon-model.ipynb`:
 
 ```text
 log(1 + relative_time)
 direction
-source_port / 65535
-destination_port / 65535
 log(1 + packet_size) / log(1 + 65535)
 ```
 
 Mỗi PCAP được cắt hoặc padding về `MAX_PACKETS = 256`, tạo:
 
 ```text
-features: [256, 5]
+features: [256, 3]
 mask    : [256]
 label   : 0 hoặc 1
 ```
 
-Encoder hiện tại là CNN 1D:
+Encoder hiện tại là CNN 1D kiểu DF-style, bám theo `RawPacketEncoder` trong `supcon-model.ipynb` nhưng giữ output embedding 256 chiều để đúng pipeline MLP/unlearning:
 
 ```text
-Conv1d(5, 64, kernel_size=5, padding=2)
-BatchNorm1d
-GELU
-Conv1d(64, 128, kernel_size=5, padding=2)
-BatchNorm1d
-GELU
-Conv1d(128, 128, kernel_size=3, padding=1)
-BatchNorm1d
-GELU
-Masked mean pooling
-Linear(128 -> 256)
+Conv1d(3 -> 32)
+Conv1d(32 -> 32)
+MaxPool
+Dropout
+
+Conv1d(32 -> 64)
+Conv1d(64 -> 64)
+MaxPool
+Dropout
+
+Conv1d(64 -> 128)
+Conv1d(128 -> 128)
+MaxPool
+Dropout
+
+Conv1d(128 -> 256)
+Conv1d(256 -> 256)
+MaxPool
+Dropout
+
+Flatten
+Linear(flat_dim -> 256)
 LayerNorm(256)
 ```
 
@@ -254,19 +266,19 @@ HOLDOUT_UNKNOWN_LABELS
 Ý nghĩa:
 
 - `KNOWN_LABELS`: nhãn được xem là known.
-- `UNKNOWN_LABELS`: nhãn unknown có xuất hiện trong train để model học khái niệm unknown.
-- `HOLDOUT_UNKNOWN_LABELS`: nhãn unknown không xuất hiện trong train, dùng để test open-world.
+- `UNKNOWN_LABELS`: nhãn unknown dùng để train/validation/test binary classifier sau khi encoder đã freeze.
+- `HOLDOUT_UNKNOWN_LABELS`: nhãn unknown không xuất hiện trong train classifier, chỉ dùng khi muốn test open-world nghiêm ngặt hơn. Mặc định hiện tại đặt `0` để dùng nhiều unknown cho binary classifier.
 
 File split được lưu để tái lập:
 
 ```text
-label_split_seed<seed>_labels<size>_k<known>_u<unknown>.json
+label_split_seed<seed>_labels<size>_known<known_count>_holdout<holdout_count>_mode<encoder_mode>.json
 ```
 
 Với cấu hình hiện tại, notebook sẽ tạo split mới dạng:
 
 ```text
-label_split_seed42_labels24_k45_u35.json
+label_split_seed42_labelsall_known10_holdout0_modesupcon.json
 ```
 
 Nếu file này đã tồn tại, notebook đọc lại thay vì random lại.
@@ -277,10 +289,13 @@ Cấu hình hiện tại nhắm tới Colab free GPU:
 
 ```text
 MAX_PACKETS = 256
+PACKET_FEATURES = 3
+ENCODER_ARCHITECTURE = 'df_style_raw_packet_encoder'
+ENCODER_MODE = 'supcon'
 EMBEDDING_DIM = 256
 BATCH_SIZE = 128
-EPOCHS = 12
-LEARNING_RATE = 5e-4
+EPOCHS = 16
+LEARNING_RATE = 2e-4
 DROPOUT = 0.20
 HIDDEN_DIMS = [512, 256, 128, 64, 32]
 ```
@@ -290,11 +305,77 @@ Cấu hình dữ liệu:
 ```text
 AUTO_LABEL_SPLIT = True
 MIN_SAMPLES_PER_LABEL = 100
-MAX_LABELS_FOR_EXPERIMENT = 24
-MAX_FILES_PER_LABEL = 160
-KNOWN_LABEL_RATIO = 0.45
-UNKNOWN_TRAIN_LABEL_RATIO = 0.35
+MAX_LABELS_FOR_EXPERIMENT = None
+KNOWN_LABEL_COUNT = 10
+HOLDOUT_UNKNOWN_LABEL_COUNT = 0
+MAX_FILES_PER_LABEL = 200
 HOLDOUT_VALIDATION_RATIO = 0.25
+```
+
+Cấu hình SupCon:
+
+```text
+SUPCON_EPOCHS = 8
+SUPCON_LEARNING_RATE = 1e-3
+SUPCON_TEMPERATURE = 0.10
+SUPCON_PROJECTION_DIM = 128
+FREEZE_ENCODER_AFTER_SUPCON = True
+SAVE_SUPCON_ENCODER_CHECKPOINTS = True
+SUPCON_CHECKPOINT_EVERY_N_BATCHES = LOG_EVERY_N_BATCHES
+SAVE_BINARY_TRAINING_CHECKPOINTS = True
+BINARY_TRAINING_CHECKPOINT_EVERY_N_BATCHES = LOG_EVERY_N_BATCHES
+```
+
+Hai mode encoder là hai lựa chọn thay thế nhau, không chồng hai encoder:
+
+```text
+ENCODER_MODE = 'cross_entropy'
+PCAP -> encoder -> embedding 256 -> MLP -> CrossEntropyLoss
+Train: cập nhật encoder + MLP bằng loss phân loại.
+
+ENCODER_MODE = 'supcon'
+PCAP known-only -> encoder -> embedding 256 -> projection 128 -> SupConLoss
+Train encoder: chỉ dùng known key.
+Sau SupCon: bỏ projection head, freeze encoder, train MLP binary known/unknown trên embedding 256.
+```
+
+`SupConPacketNet` trong notebook chỉ là wrapper tạm thời để gắn projection head khi train SupCon. Nó không phải encoder thứ hai nối tiếp encoder chính.
+
+Trong mode `supcon`, encoder được lưu riêng trong lúc pretrain để tránh mất trọng số nếu interrupt cell train:
+
+```text
+supcon_encoder_latest.pt
+supcon_encoder_final.pt
+```
+
+`supcon_encoder_latest.pt` được ghi đè định kỳ trong quá trình train và cũng được lưu lại nếu bắt được `KeyboardInterrupt`. `supcon_encoder_final.pt` chỉ có khi SupCon pretrain chạy xong. Checkpoint này chứa `encoder_state_dict`; `projector_state_dict` chỉ dùng để kiểm tra/resume SupCon, còn MLP binary dùng embedding từ encoder.
+
+Phần train MLP binary trong cùng cell cũng lưu checkpoint riêng:
+
+```text
+binary_training_latest.pt
+binary_training_best.pt
+```
+
+`binary_training_latest.pt` là trạng thái mới nhất của model encoder + classifier trong lúc train. `binary_training_best.pt` là best state theo validation metric hiện chọn, mặc định là `balanced_accuracy`. File `best_model.pt` ở cell test vẫn là checkpoint cuối cùng sau khi đã sweep threshold và evaluate test.
+
+Ý nghĩa training hiện tại:
+
+```text
+Stage 1: SupCon pretrain encoder chỉ trên 10 known key.
+Stage 2: Freeze encoder, giữ BatchNorm ở eval mode để encoder không cập nhật bằng unknown.
+Stage 3: Train MLP binary known/unknown trên embedding từ encoder frozen.
+```
+
+Phân biệt train encoder và dùng encoder:
+
+```text
+Train encoder:
+input -> encoder -> loss -> backprop -> cập nhật trọng số encoder
+
+Dùng encoder:
+input -> encoder đã train -> embedding 256
+không backprop, không cập nhật trọng số
 ```
 
 Cấu hình metric/evaluate:
@@ -308,14 +389,16 @@ USE_THRESHOLD_SWEEP = True
 SAVE_EMBEDDINGS_AFTER_TRAIN = False
 ```
 
+Cache packet feature được tách theo `ENCODER_ARCHITECTURE`, `PACKET_FEATURES` và `MAX_PACKETS`, nên khi đổi từ feature 5 chiều sang 3 chiều notebook sẽ tự tạo cache mới thay vì đọc nhầm cache cũ.
+
 Cấu hình device:
 
 ```text
 DEVICE_NAME = ''
-REQUIRE_CUDA = False
+REQUIRE_CUDA = True
 ```
 
-`DEVICE_NAME = ''` nghĩa là tự chọn `cuda` nếu runtime thật sự có CUDA, ngược lại fallback CPU. Log gần nhất xác nhận Colab đang dùng:
+`DEVICE_NAME = ''` nghĩa là tự chọn `cuda` nếu runtime thật sự có CUDA. Với cấu hình hiện tại dùng toàn bộ `45` nhãn, tối đa `200` PCAP/nhãn, SupCon pretrain và encoder DF-style, `REQUIRE_CUDA=True` để notebook dừng sớm nếu runtime chỉ có CPU. Log GPU đúng cần có dạng:
 
 ```text
 PyTorch version: 2.11.0+cu128
@@ -333,12 +416,15 @@ Notebook chính:
 MLP-Classfication/code/train_pipeline.ipynb
 ```
 
-Notebook chỉ giữ một mode chính: Google Colab + Google Drive.
+Notebook hiện hỗ trợ hai kiểu runtime:
+
+- VS Code/local filesystem: ưu tiên cho workflow hiện tại. Cấu hình path dữ liệu bằng biến môi trường `DATA_DIR`/`DATA_DIRS`, hoặc sửa `LOCAL_DATA_DIR_LIST` trong cell cấu hình.
+- Google Colab + Google Drive: chỉ dùng khi mở notebook trong Colab thật sự; cell cấu hình mới mount Drive trong trường hợp này.
 
 Thứ tự chạy:
 
 1. Cài dependency runtime.
-2. Mount Google Drive và xác định dataset.
+2. Xác định runtime và dataset path.
 3. Import thư viện, chọn device.
 4. Định nghĩa parser PCAP, Dataset, encoder, MLP, train/evaluate/unlearning.
 5. Quét label inventory.
@@ -390,12 +476,12 @@ python MLP-Classfication/train_pipeline.py train \
   --output-dir ./artifacts
 ```
 
-CLI đã được đồng bộ các mặc định chính với notebook:
+CLI vẫn dùng pipeline CrossEntropy/DF-style gọn để chạy ngoài notebook. SupCon known-only hiện được triển khai trong notebook chính.
 
 ```text
 batch_size = 128
-epochs = 12
-learning_rate = 5e-4
+epochs = 16
+learning_rate = 2e-4
 log_every_n_batches = 2
 holdout_validation_ratio = 0.25
 unknown_threshold = 0.50
@@ -403,7 +489,116 @@ checkpoint_score_metric = balanced_accuracy
 threshold_sweep = enabled by default
 ```
 
-Notebook vẫn là source chính cho thực nghiệm hiện tại. CLI dùng khi cần chạy không qua Jupyter/Colab.
+Notebook vẫn là source chính cho thực nghiệm hiện tại. CLI dùng khi cần chạy không qua Jupyter.
+
+### Chạy bằng Colab CLI
+
+Colab CLI không mount trực tiếp `cwd` local như một remote filesystem. Workflow đúng là:
+
+```text
+local project
+  -> zip project
+  -> colab upload
+  -> extract to /content/unlearning
+  -> run notebook/script inside Colab VM
+```
+
+Session mặc định:
+
+```text
+SESSION=unlearning
+REMOTE_ROOT=/content/unlearning
+GPU=T4
+```
+
+Tạo/kiểm tra session:
+
+```bash
+colab sessions
+colab new -s unlearning --gpu T4
+colab status -s unlearning
+```
+
+Sync project local hiện tại lên Colab:
+
+```bash
+scripts/colab_sync_project.sh
+```
+
+Script này sẽ:
+
+- tạo session `unlearning` nếu chưa có;
+- zip project local, bỏ qua `.git`, cache, checkpoint, PCAP local;
+- upload archive lên `/content/unlearning_project.zip`;
+- giải nén thành `/content/unlearning`.
+
+Dataset vẫn nằm trong Google Drive, nên Drive phải được mount trong session Colab trước khi chạy notebook. Nếu `colab drivemount` bị `Access blocked`, mở session bằng browser:
+
+```bash
+colab url -s unlearning
+```
+
+Sau đó chạy trong Colab browser:
+
+```python
+from google.colab import drive
+drive.mount('/content/drive')
+```
+
+Kiểm tra dataset:
+
+```python
+from pathlib import Path
+
+data_dir = Path('/content/drive/MyDrive/Traffic FingerPrinting /Data/273 (200samples key)')
+print(data_dir.exists())
+print(len(list(data_dir.rglob('*.pcap'))))
+```
+
+Khi Drive đã mount, chạy notebook chính bằng CLI:
+
+```bash
+scripts/colab_run_notebook.sh
+```
+
+Nếu muốn vừa sync vừa chạy:
+
+```bash
+SYNC_FIRST=1 scripts/colab_run_notebook.sh
+```
+
+Các biến môi trường có thể chỉnh:
+
+```bash
+SESSION=unlearning
+REMOTE_ROOT=/content/unlearning
+DATA_DIR="/content/drive/MyDrive/Traffic FingerPrinting /Data/273 (200samples key)"
+TIMEOUT=7200
+```
+
+Ví dụ:
+
+```bash
+DATA_DIR="/content/drive/MyDrive/Traffic FingerPrinting /Data/273 (200samples key)" \
+TIMEOUT=10800 \
+SYNC_FIRST=1 \
+scripts/colab_run_notebook.sh
+```
+
+Output remote sau khi chạy:
+
+```text
+/content/unlearning/MLP-Classfication/code/train_pipeline.executed.ipynb
+/content/unlearning/MLP-Classfication/code/RUN_LOG.md
+```
+
+Muốn lấy file từ Colab về local, dùng:
+
+```bash
+colab download -s unlearning \
+  /content/unlearning/MLP-Classfication/code/RUN_LOG.md \
+  MLP-Classfication/code/RUN_LOG.md
+```
 
 ## 10. Metric và đánh giá
 
@@ -458,7 +653,7 @@ confusion_matrix  = [[150, 12], [477, 93]]
 
 Nhận xét: model nhận diện `known` tốt hơn nhiều so với `unknown`; cần ưu tiên cải thiện `unknown_recall` và `balanced_accuracy`, không chỉ nhìn accuracy.
 
-Kết quả chạy mới nhất ngày `2026-09-13` với Colab GPU, `24` nhãn và tối đa `160` PCAP/nhãn:
+Kết quả compact baseline ngày `2026-09-13` với Colab GPU, `24` nhãn và tối đa `160` PCAP/nhãn:
 
 ```text
 device                  = cuda, Tesla T4
@@ -476,13 +671,32 @@ test balanced_accuracy  = 0.6105
 test confusion_matrix   = [[183, 81], [374, 418]]
 ```
 
-So với log cũ, `unknown_recall` tăng từ `0.1632` lên `0.5278`, accuracy tăng từ `0.3320` lên `0.5691`, và balanced accuracy tăng từ `0.5445` lên `0.6105`. Đây là baseline hiện tại tốt nhất, nhưng vẫn chưa đủ mạnh để dùng làm mốc unlearning cuối vì gần một nửa unknown test vẫn bị đoán thành known.
+So với log cũ, `unknown_recall` tăng từ `0.1632` lên `0.5278`, accuracy tăng từ `0.3320` lên `0.5691`, và balanced accuracy tăng từ `0.5445` lên `0.6105`. Đây là baseline tham chiếu đã export vào `RUN_LOG.md`, nhưng vẫn chưa đủ mạnh để dùng làm mốc unlearning cuối vì gần một nửa unknown test vẫn bị đoán thành known.
+
+Kết quả trung gian sau khi đổi sang DF-style encoder 3 feature nhưng vẫn dùng `24` nhãn và tối đa `160` PCAP/nhãn:
+
+```text
+total parameters        = 1,417,570
+best val balanced_acc   = 0.5875
+best unknown threshold  = 0.35
+test accuracy           = 0.6364
+test known_recall       = 0.4848
+test unknown_recall     = 0.6869
+test unknown_precision  = 0.8000
+test balanced_accuracy  = 0.5859
+test confusion_matrix   = [[128, 136], [248, 544]]
+epoch 1 time            = 2435.6s
+```
+
+Diễn giải: accuracy và unknown recall tăng, nhưng balanced accuracy giảm vì known recall tụt mạnh. Vì yêu cầu hiện tại là encoder không học từ unknown, notebook đã đổi sang SupCon known-only: dùng toàn bộ `45` nhãn, chọn `10` known key, `35` key còn lại làm unknown cho binary classifier, pretrain encoder bằng SupCon rồi freeze trước khi train MLP.
 
 Chi tiết kết quả được lưu ở:
 
 ```text
 MLP-Classfication/results.md
 ```
+
+Lưu ý: kết quả DF-style ở trên là kết quả trung gian từ output notebook, chưa được export thành `RUN_LOG.md`. Sau lần chạy cấu hình SupCon known-only hiện tại, cần export lại log và cập nhật `results.md`.
 
 ## 11. Output artifact
 
@@ -568,12 +782,14 @@ Các điểm dễ gây chậm:
 - Test full dataset và lưu embedding toàn bộ có thể lâu dù train đã xong.
 - Nếu interrupt từ VS Code không dừng, có thể runtime Colab vẫn đang chạy ngầm; nên stop/restart runtime từ Colab.
 
-Với Colab free GPU, cấu hình hiện tại đã tăng batch size và tắt lưu embedding sau train để giảm thời gian.
+Với Colab free GPU, cấu hình hiện tại dùng toàn bộ `45` nhãn, chọn `10` known key, `35` key còn lại làm unknown cho binary classifier, tối đa `200` PCAP/nhãn, giữ `batch_size = 128`, pretrain SupCon `8` epoch rồi freeze encoder.
 
 Nếu cần quick debug:
 
 ```text
-MAX_LABELS_FOR_EXPERIMENT = 10
+MAX_LABELS_FOR_EXPERIMENT = 15
+KNOWN_LABEL_COUNT = 5
+HOLDOUT_UNKNOWN_LABEL_COUNT = 0
 MAX_FILES_PER_LABEL = 50
 EPOCHS = 3
 BATCH_SIZE = 64
@@ -594,10 +810,11 @@ Nhưng cấu hình full dùng toàn bộ `45` nhãn và `9005` PCAP có thể t�
 
 ## 15. Việc cần làm tiếp
 
-1. Giữ run `2026-09-13` trong `MLP-Classfication/results.md` làm baseline hiện tại.
-2. Chạy thêm nhiều seed label split để kiểm tra metric có ổn định không.
-3. Nếu runtime cho phép, thử `MAX_LABELS_FOR_EXPERIMENT = 32` hoặc toàn bộ `45` nhãn.
-4. Thử `MAX_FILES_PER_LABEL = 200` để dùng gần đủ dataset baseline.
-5. Thêm feature packet/flow như inter-arrival time, signed packet size, protocol và TCP flags.
-6. Nếu cần đánh giá open-world nghiêm ngặt, tách riêng `unknown-calibration` và `unknown-final-test`.
-7. Khi `balanced_accuracy` và `unknown_recall` ổn định hơn, tạo `Df` ở cấp instance và chạy unlearning.
+1. Chạy lại notebook với cấu hình hiện tại: toàn bộ `45` nhãn, `10` known key, `35` unknown key, SupCon `8` epoch và binary MLP `16` epoch.
+2. Export output notebook sang `MLP-Classfication/code/RUN_LOG.md` sau khi chạy xong.
+3. Cập nhật `MLP-Classfication/results.md` bằng metric mới; giữ run cũ làm baseline tham chiếu.
+4. Chạy thêm nhiều seed label split để kiểm tra metric có ổn định không.
+5. Nếu runtime cho phép, thử toàn bộ `45` nhãn.
+6. Thêm feature packet/flow như inter-arrival time, signed packet size, protocol và TCP flags.
+7. Nếu cần đánh giá open-world nghiêm ngặt, tách riêng `unknown-calibration` và `unknown-final-test`.
+8. Khi `balanced_accuracy` và `unknown_recall` ổn định hơn, tạo `Df` ở cấp instance và chạy unlearning.

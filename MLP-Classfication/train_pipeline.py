@@ -7,12 +7,12 @@ Each .txt/.csv file represents one flow. Each non-empty line contains at least:
     timestamp,src_ip,src_port,dst_ip,dst_port,packet_size
 
 The pipeline also reads .pcap/.cap files directly. One pcap file is treated as
-one sample and packets are converted to the same five features. If one pcap
+one sample and packets are converted to three packet features. If one pcap
 contains multiple independent flows, split it into flow-level files first.
 
 The encoder converts a flow into a fixed-size embedding of 256 dimensions:
 
-    raw flow -> packet features -> 1D CNN -> embedding[256] -> MLP -> 2 logits
+    raw flow -> packet features [time, direction, size] -> 1D CNN -> embedding[256] -> MLP -> 2 logits
 
 Labels are inferred from either the parent directory or the filename. Examples:
 
@@ -66,12 +66,14 @@ from pathlib import Path
 from typing import Sequence
 
 import torch
+import torch.nn.functional as F
 from torch import Tensor, nn
 from torch.utils.data import DataLoader, Dataset
 
 
-PACKET_FEATURES = 5
+PACKET_FEATURES = 3
 NUM_CLASSES = 2
+ENCODER_ARCHITECTURE = "df_style_raw_packet_encoder"
 
 # Dataset notes from the Colab/Drive inspection. These constants are advisory;
 # CLI users still choose actual inputs through --input-dir.
@@ -197,8 +199,7 @@ def parse_flow_file(path: Path, max_packets: int) -> tuple[Tensor, Tensor]:
     """Convert one packet-flow file into (features, valid_mask).
 
     Feature order per packet:
-        log(1 + relative_time), direction, source_port, destination_port,
-        log(1 + packet_size)
+        log(1 + relative_time), direction, normalized log packet size.
     """
     packets: list[tuple[float, str, int, str, int, float]] = []
     if path.suffix.lower() in {".pcap", ".cap"}:
@@ -241,7 +242,7 @@ def parse_flow_file(path: Path, max_packets: int) -> tuple[Tensor, Tensor]:
     ).most_common(1)[0][0]
     start_time = packets[0][0]
 
-    for index, (timestamp, src_ip, src_port, _, dst_port, packet_size) in enumerate(
+    for index, (timestamp, src_ip, _, _, _, packet_size) in enumerate(
         packets[:max_packets]
     ):
         relative_time = max(0.0, timestamp - start_time)
@@ -250,8 +251,6 @@ def parse_flow_file(path: Path, max_packets: int) -> tuple[Tensor, Tensor]:
             [
                 math.log1p(relative_time),
                 direction,
-                src_port / 65535.0,
-                dst_port / 65535.0,
                 math.log1p(packet_size) / math.log1p(65535.0),
             ],
             dtype=torch.float32,
@@ -371,9 +370,10 @@ class FlowDataset(Dataset[tuple[Tensor, Tensor, Tensor]]):
     def cache_path(self, record: FlowRecord) -> Path | None:
         if self.cache_dir is None:
             return None
-        digest = hashlib.sha1(str(record.path).encode("utf-8")).hexdigest()[:16]
+        cache_key = f"{ENCODER_ARCHITECTURE}|features={PACKET_FEATURES}|packets={self.max_packets}|{record.path}"
+        digest = hashlib.sha1(cache_key.encode("utf-8")).hexdigest()[:16]
         safe_label = record.original_label.replace("/", "_").replace(" ", "_")
-        return self.cache_dir / f"{safe_label}_{digest}.pt"
+        return self.cache_dir / f"{ENCODER_ARCHITECTURE}_f{PACKET_FEATURES}_p{self.max_packets}_{safe_label}_{digest}.pt"
 
     def load_or_parse(self, record: FlowRecord) -> tuple[Tensor, Tensor]:
         cache_path = self.cache_path(record)
@@ -395,32 +395,90 @@ class FlowDataset(Dataset[tuple[Tensor, Tensor, Tensor]]):
 
 
 class FlowEncoder(nn.Module):
-    """Encode a padded packet sequence into a 256-dimensional flow vector."""
+    """DF-style CNN encoder for raw packet sequences.
 
-    def __init__(self, embedding_dim: int = 256):
+    This follows the RawPacketEncoder idea from supcon-model.ipynb:
+    four Conv1d blocks with pooling, then a fully connected layer to produce
+    the 256-dimensional embedding required by the MLP/unlearning plan.
+    """
+
+    def __init__(self, max_packets: int, embedding_dim: int = 256):
         super().__init__()
-        self.network = nn.Sequential(
-            nn.Conv1d(PACKET_FEATURES, 64, kernel_size=5, padding=2),
-            nn.BatchNorm1d(64),
-            nn.GELU(),
-            nn.Conv1d(64, 128, kernel_size=5, padding=2),
-            nn.BatchNorm1d(128),
-            nn.GELU(),
-            nn.Conv1d(128, 128, kernel_size=3, padding=1),
-            nn.BatchNorm1d(128),
-            nn.GELU(),
-        )
-        self.projection = nn.Sequential(
-            nn.Linear(128, embedding_dim),
-            nn.LayerNorm(embedding_dim),
-        )
+        self.max_packets = max_packets
+        self.embedding_dim = embedding_dim
+        kernel_size = 8
+        pool_size = 8
+        pool_stride = 4
+
+        self.conv1 = nn.Conv1d(PACKET_FEATURES, 32, kernel_size, stride=1)
+        self.conv1_1 = nn.Conv1d(32, 32, kernel_size, stride=1)
+        self.conv2 = nn.Conv1d(32, 64, kernel_size, stride=1)
+        self.conv2_2 = nn.Conv1d(64, 64, kernel_size, stride=1)
+        self.conv3 = nn.Conv1d(64, 128, kernel_size, stride=1)
+        self.conv3_3 = nn.Conv1d(128, 128, kernel_size, stride=1)
+        self.conv4 = nn.Conv1d(128, 256, kernel_size, stride=1)
+        self.conv4_4 = nn.Conv1d(256, 256, kernel_size, stride=1)
+
+        self.batch_norm1 = nn.BatchNorm1d(32)
+        self.batch_norm2 = nn.BatchNorm1d(64)
+        self.batch_norm3 = nn.BatchNorm1d(128)
+        self.batch_norm4 = nn.BatchNorm1d(256)
+
+        self.max_pool_1 = nn.MaxPool1d(kernel_size=pool_size, stride=pool_stride)
+        self.max_pool_2 = nn.MaxPool1d(kernel_size=pool_size, stride=pool_stride)
+        self.max_pool_3 = nn.MaxPool1d(kernel_size=pool_size, stride=pool_stride)
+        self.max_pool_4 = nn.MaxPool1d(kernel_size=pool_size, stride=pool_stride)
+
+        self.dropout1 = nn.Dropout(p=0.1)
+        self.dropout2 = nn.Dropout(p=0.1)
+        self.dropout3 = nn.Dropout(p=0.1)
+        self.dropout4 = nn.Dropout(p=0.1)
+
+        with torch.no_grad():
+            dummy = torch.zeros(1, PACKET_FEATURES, max_packets)
+            flat_dim = self._forward_convs(dummy).flatten(start_dim=1).shape[1]
+        self.fc = nn.Linear(flat_dim, embedding_dim)
+        self.output_norm = nn.LayerNorm(embedding_dim)
+        self._init_weights()
+
+    @staticmethod
+    def _same_pad(x: Tensor) -> Tensor:
+        return F.pad(x, (3, 4))
+
+    def _init_weights(self) -> None:
+        for module in self.modules():
+            if isinstance(module, (nn.Conv1d, nn.Linear)):
+                nn.init.xavier_uniform_(module.weight)
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)
+            elif isinstance(module, nn.BatchNorm1d):
+                nn.init.ones_(module.weight)
+                nn.init.zeros_(module.bias)
+
+    def _forward_convs(self, x: Tensor) -> Tensor:
+        x = F.elu(self.conv1(self._same_pad(x)))
+        x = F.elu(self.batch_norm1(self.conv1_1(self._same_pad(x))))
+        x = self.dropout1(self.max_pool_1(self._same_pad(x)))
+
+        x = F.relu(self.conv2(self._same_pad(x)))
+        x = F.relu(self.batch_norm2(self.conv2_2(self._same_pad(x))))
+        x = self.dropout2(self.max_pool_2(self._same_pad(x)))
+
+        x = F.relu(self.conv3(self._same_pad(x)))
+        x = F.relu(self.batch_norm3(self.conv3_3(self._same_pad(x))))
+        x = self.dropout3(self.max_pool_3(self._same_pad(x)))
+
+        x = F.relu(self.conv4(self._same_pad(x)))
+        x = F.relu(self.batch_norm4(self.conv4_4(self._same_pad(x))))
+        x = self.dropout4(self.max_pool_4(self._same_pad(x)))
+        return x
 
     def forward(self, features: Tensor, mask: Tensor) -> Tensor:
-        # features: [batch, packets, packet_features]
-        hidden = self.network(features.transpose(1, 2)).transpose(1, 2)
-        valid = mask.unsqueeze(-1)
-        pooled = (hidden * valid).sum(dim=1) / valid.sum(dim=1).clamp_min(1.0)
-        return self.projection(pooled)
+        # features: [batch, packets, 3]. Keep padded packet positions zero.
+        features = features * mask.unsqueeze(-1)
+        hidden = self._forward_convs(features.transpose(1, 2))
+        embedding = self.fc(hidden.flatten(start_dim=1))
+        return self.output_norm(embedding)
 
 
 class MLPClassifier(nn.Module):
@@ -456,9 +514,10 @@ class FlowModel(nn.Module):
         embedding_dim: int = 256,
         hidden_dims: Sequence[int] = (512, 256, 128, 64, 32),
         dropout: float = 0.20,
+        max_packets: int = 256,
     ):
         super().__init__()
-        self.encoder = FlowEncoder(embedding_dim)
+        self.encoder = FlowEncoder(max_packets=max_packets, embedding_dim=embedding_dim)
         self.classifier = MLPClassifier(embedding_dim, hidden_dims, dropout)
 
     def forward(self, features: Tensor, mask: Tensor) -> tuple[Tensor, Tensor]:
@@ -852,6 +911,8 @@ def save_checkpoint(
         {
             "model_state_dict": model.state_dict(),
             "model_config": {
+                "encoder_architecture": ENCODER_ARCHITECTURE,
+                "packet_features": PACKET_FEATURES,
                 "embedding_dim": embedding_dim,
                 "hidden_dims": list(hidden_dims),
                 "dropout": dropout,
@@ -877,6 +938,7 @@ def load_checkpoint(
         embedding_dim=int(config["embedding_dim"]),
         hidden_dims=tuple(int(value) for value in config["hidden_dims"]),
         dropout=float(config["dropout"]),
+        max_packets=int(config.get("max_packets", 256)),
     )
     model.load_state_dict(checkpoint["model_state_dict"])
     model.to(device)
@@ -1005,7 +1067,12 @@ def train_command(args: argparse.Namespace) -> None:
     )
 
     hidden_dims = tuple(int(value) for value in args.hidden_dims.split(","))
-    model = FlowModel(args.embedding_dim, hidden_dims, args.dropout)
+    model = FlowModel(
+        embedding_dim=args.embedding_dim,
+        hidden_dims=hidden_dims,
+        dropout=args.dropout,
+        max_packets=args.max_packets,
+    )
     result = train_model(
         model,
         train_loader,
@@ -1193,8 +1260,8 @@ def build_parser() -> argparse.ArgumentParser:
     train_parser.add_argument("--embedding-dim", type=int, default=256)
     train_parser.add_argument("--hidden-dims", default="512,256,128,64,32")
     train_parser.add_argument("--dropout", type=float, default=0.20)
-    train_parser.add_argument("--epochs", type=int, default=12)
-    train_parser.add_argument("--learning-rate", type=float, default=5e-4)
+    train_parser.add_argument("--epochs", type=int, default=16)
+    train_parser.add_argument("--learning-rate", type=float, default=2e-4)
     train_parser.add_argument("--max-train-batches-per-epoch", type=int, default=None)
     train_parser.add_argument("--max-eval-batches", type=int, default=None)
     train_parser.add_argument("--max-test-batches", type=int, default=None)

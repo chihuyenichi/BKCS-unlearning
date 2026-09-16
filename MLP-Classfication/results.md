@@ -1,4 +1,30 @@
-# Báo cáo kết quả hiện tại
+# Báo cáo kết quả baseline gần nhất
+
+Lưu ý: báo cáo này ghi lại run đã chạy xong ngày `2026-09-13` trước khi đổi encoder sang DF-style 3 feature và trước khi tăng thêm dữ liệu. Code hiện tại đã chuyển sang:
+
+```text
+PCAP -> packet features [256, 3] -> DF-style CNN encoder -> embedding 256 -> MLP -> known/unknown
+```
+
+Do đó các số liệu dưới đây là baseline tham chiếu, không phải kết quả của cấu hình mới. Sau khi chạy lại notebook, cần cập nhật file này bằng kết quả mới.
+
+Cấu hình cần chạy tiếp:
+
+```text
+ENCODER_MODE              = supcon
+MAX_LABELS_FOR_EXPERIMENT = None
+KNOWN_LABEL_COUNT         = 10
+HOLDOUT_UNKNOWN_LABEL_COUNT = 0
+MAX_FILES_PER_LABEL       = 200
+EPOCHS                    = 16
+BATCH_SIZE                = 128
+LEARNING_RATE             = 2e-4
+SUPCON_EPOCHS             = 8
+SUPCON_LEARNING_RATE      = 1e-3
+FREEZE_ENCODER_AFTER_SUPCON = True
+PACKET_FEATURES           = 3
+ENCODER_ARCHITECTURE      = df_style_raw_packet_encoder
+```
 
 ## 1. Thông tin thí nghiệm
 
@@ -11,10 +37,10 @@ Mục tiêu           : Phân loại network flow thành 2 lớp known/unknown
 Trạng thái         : Đã chạy hoàn chỉnh train, validation, threshold sweep, test và lưu checkpoint
 ```
 
-Thí nghiệm này đánh giá pipeline hiện tại:
+Thí nghiệm này đánh giá pipeline cũ tại thời điểm chạy:
 
 ```text
-PCAP -> packet features [256, 5] -> CNN encoder -> embedding 256 -> MLP -> known/unknown
+PCAP -> packet features [256, 5] -> CNN encoder gọn -> embedding 256 -> MLP -> known/unknown
 ```
 
 ## 2. Môi trường chạy
@@ -47,7 +73,7 @@ Số nhãn đủ điều kiện >= 100 samples : 45
 Số nhãn bị loại vì thiếu sample     : 0
 ```
 
-Thí nghiệm hiện tại chỉ dùng một phần dataset để phù hợp với Colab free GPU:
+Baseline tham chiếu chỉ dùng một phần dataset để phù hợp với Colab free GPU:
 
 ```text
 MAX_LABELS_FOR_EXPERIMENT = 24
@@ -139,7 +165,7 @@ Validation có chứa một phần holdout unknown để tune threshold phát hi
 
 ## 6. Cấu hình mô hình
 
-Input sau parser:
+Input sau parser trong baseline này:
 
 ```text
 Packet tensor = [256, 5]
@@ -147,7 +173,7 @@ Mask tensor   = [256]
 Binary label  = 0 known, 1 unknown
 ```
 
-Encoder:
+Encoder trong baseline này:
 
 ```text
 Conv1d(5, 64, kernel_size=5, padding=2)
@@ -338,11 +364,58 @@ Kết quả còn hạn chế:
 - `balanced_accuracy = 0.6105` vẫn còn thấp.
 - `unknown_recall = 0.5278`, nghĩa là gần một nửa unknown test vẫn bị đoán thành known.
 - Test set lệch mạnh về unknown, nên không nên đánh giá bằng accuracy thuần.
-- Feature hiện tại mới gồm 5 đặc trưng packet cơ bản, chưa có nhiều đặc trưng timing/protocol nâng cao.
+- Baseline này dùng 5 đặc trưng packet cơ bản và encoder gọn; code hiện tại đã chuyển sang 3 feature + DF-style encoder để so sánh lại.
 
-## 14. Kết luận
+## 14. Kết quả trung gian với DF-style encoder
 
-Run này là baseline chạy được hiện tại của project.
+Sau baseline compact, notebook đã được đổi sang encoder DF-style 3 feature giống hướng `RawPacketEncoder` trong `supcon-model.ipynb`.
+
+Lưu ý: kết quả dưới đây lấy từ output notebook trước khi clear output để chuẩn bị chạy cấu hình mới; chưa được export vào `RUN_LOG.md`.
+
+```text
+PACKET_FEATURES           = 3
+ENCODER_ARCHITECTURE      = df_style_raw_packet_encoder
+MAX_LABELS_FOR_EXPERIMENT = 24
+MAX_FILES_PER_LABEL       = 160
+Total parameters          = 1,417,570
+```
+
+Metric chính:
+
+```text
+best validation balanced_accuracy = 0.5875
+best unknown threshold            = 0.35
+test loss                         = 0.7216
+test accuracy                     = 0.6364
+test known_recall                 = 0.4848
+test unknown_recall               = 0.6869
+test unknown_precision            = 0.8000
+test balanced_accuracy            = 0.5859
+test confusion_matrix             = [[128, 136], [248, 544]]
+epoch 1 time                      = 2435.6s
+total train time                  = 2546.4s
+```
+
+So sánh nhanh với compact baseline:
+
+| Metric | Compact baseline | DF-style trung gian | Nhận xét |
+| --- | ---: | ---: | --- |
+| `accuracy` | 0.5691 | 0.6364 | Tăng |
+| `known_recall` | 0.6932 | 0.4848 | Giảm mạnh |
+| `unknown_recall` | 0.5278 | 0.6869 | Tăng |
+| `unknown_precision` | 0.8377 | 0.8000 | Giảm nhẹ |
+| `balanced_accuracy` | 0.6105 | 0.5859 | Giảm |
+
+Diễn giải:
+
+- DF-style encoder giúp model dự đoán `unknown` nhiều hơn, nên `unknown_recall` tăng.
+- `known_recall` giảm mạnh, nghĩa là nhiều known bị đẩy sang unknown; đây là lý do `balanced_accuracy` giảm dù accuracy tăng.
+- Số tham số tăng từ `434,402` lên `1,417,570`, nhưng lượng dữ liệu vẫn chỉ `24 * 160`, nên mô hình có nguy cơ học lệch theo split hoặc calibration threshold.
+- Hướng tiếp theo hợp lý là chuyển sang SupCon known-only: dùng toàn bộ `45` nhãn, chọn `10` known key, `35` key còn lại làm unknown cho binary classifier, pretrain encoder trên known rồi freeze trước khi train MLP.
+
+## 15. Kết luận
+
+Run này là baseline chạy được gần nhất của project trước khi thay encoder.
 
 Kết luận kỹ thuật:
 
@@ -351,13 +424,15 @@ Kết luận kỹ thuật:
 - Chưa nên dùng model này làm baseline cuối cho instance-wise unlearning.
 - Trước khi đánh giá unlearning, cần cải thiện classifier nền, đặc biệt là `unknown_recall` và `balanced_accuracy`.
 
-## 15. Hướng cải thiện tiếp theo
+## 16. Hướng cải thiện tiếp theo
 
 Các hướng nên ưu tiên:
 
-1. Chạy thêm nhiều seed label split để kiểm tra độ ổn định của kết quả.
-2. Tăng `MAX_LABELS_FOR_EXPERIMENT` lên `32` hoặc dùng toàn bộ `45` nhãn nếu runtime cho phép.
-3. Tăng `MAX_FILES_PER_LABEL` lên `200` để dùng gần đủ dataset baseline.
-4. Bổ sung feature packet/flow như inter-arrival time, signed packet size theo direction, protocol và TCP flags.
-5. Tách rõ `unknown-calibration` và `unknown-final-test` nếu cần đánh giá open-world nghiêm ngặt.
-6. Sau khi classifier ổn định hơn, mới tạo `Df` ở cấp instance và chạy unlearning.
+1. Chạy lại notebook với cấu hình hiện tại: `ENCODER_MODE='supcon'`, toàn bộ `45` nhãn, `10` known key, SupCon `8` epoch, MLP binary `16` epoch.
+2. Export output notebook sang `MLP-Classfication/code/RUN_LOG.md` sau khi chạy xong.
+3. Cập nhật lại báo cáo này bằng metric mới.
+4. Chạy thêm nhiều seed label split để kiểm tra độ ổn định của kết quả.
+5. Nếu runtime cho phép, thử toàn bộ `45` nhãn.
+6. Bổ sung feature packet/flow như inter-arrival time, signed packet size theo direction, protocol và TCP flags.
+7. Tách rõ `unknown-calibration` và `unknown-final-test` nếu cần đánh giá open-world nghiêm ngặt.
+8. Sau khi classifier ổn định hơn, mới tạo `Df` ở cấp instance và chạy unlearning.
