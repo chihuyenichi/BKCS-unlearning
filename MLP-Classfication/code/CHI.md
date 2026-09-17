@@ -40,6 +40,16 @@ Notebook cũ để tham khảo xử lý traffic và thử mô hình embedding. N
 - Chưa chuẩn `# OVERVIEW:`; comment hiện tại: `from scipy import stats`.
 - Chưa có nội dung code.
 - Chưa có nội dung code.
+
+## normalize_pcap_dataset.ipynb
+
+Notebook Colab self-contained để mount Google Drive và chạy extractor chuẩn hóa PCAP trên CPU/RAM Colab. Toàn bộ parser và schema artifact nằm trực tiếp trong notebook, không gọi code bên ngoài.
+
+- Mount Google Drive trong Colab.
+- Cài Scapy; không cần sync project vào Colab.
+- Cấu hình `273 (lan 1)`, output Drive, sharding và resume.
+- Parse PCAP, tạo shard/manifest/checksum và ghi trực tiếp vào Drive.
+- Đọc metadata để kiểm tra kết quả.
 - Chưa có `# OVERVIEW:` chuẩn; dòng đầu là code/import.
 - Chưa có `# OVERVIEW:` chuẩn; dòng đầu là code/import.
 - Chưa chuẩn `# OVERVIEW:`; comment hiện tại là dòng phân tách.

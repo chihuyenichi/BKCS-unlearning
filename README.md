@@ -45,7 +45,9 @@ Instance-wise unlearning: quên Df, giữ Dr
 - [12. Unlearning](#12-unlearning)
 - [13. Log và tài liệu phụ trợ](#13-log-và-tài-liệu-phụ-trợ)
 - [14. Lưu ý hiệu năng](#14-lưu-ý-hiệu-năng)
-- [15. Việc cần làm tiếp](#15-việc-cần-làm-tiếp)
+- [15. Chuẩn hóa PCAP thành dataset tái sử dụng](#15-chuẩn-hóa-pcap-thành-dataset-tái-sử-dụng)
+- [16. Việc cần làm tiếp](#16-việc-cần-làm-tiếp)
+- [17. Chạy train trên VM với Drive](#17-chạy-train-trên-vm-với-drive)
 
 ## 1. Mục tiêu
 
@@ -808,7 +810,35 @@ MAX_FILES_PER_LABEL = None
 
 Nhưng cấu hình full dùng toàn bộ `45` nhãn và `9005` PCAP có thể tốn thời gian đáng kể.
 
-## 15. Việc cần làm tiếp
+## 15. Chuẩn hóa PCAP thành dataset tái sử dụng
+
+Notebook Colab self-contained để chuẩn hóa `273 (lan 1)`:
+
+```text
+MLP-Classfication/code/normalize_pcap_dataset.ipynb
+```
+
+Khi muốn dùng CPU/RAM của Google Colab, mở notebook self-contained [MLP-Classfication/code/normalize_pcap_dataset.ipynb](MLP-Classfication/code/normalize_pcap_dataset.ipynb). Notebook mount Drive trong kernel Colab, chứa trực tiếp toàn bộ logic extract và không cần sync project lên `/content/unlearning`; nó không dùng RAM/CPU máy local.
+
+Mặc định script đọc:
+
+```text
+/content/drive/MyDrive/Traffic FingerPrinting /Data/273 (lan 1)
+```
+
+và tạo artifact tại:
+
+```text
+/content/drive/MyDrive/unlearning-artifacts/normalized/273_lan_1
+```
+
+Artifact không lưu `known/unknown` cố định. Mỗi shard `.pt` chứa `features [B,256,3]`, `masks [B,256]`, `label_ids` và `sample_ids`; `manifest.jsonl` giữ nhãn gốc, source path, packet count, trạng thái parse và vị trí shard. `label_map.json` cung cấp ánh xạ nhãn gốc sang ID multiclass.
+
+Sau khi Colab ngắt, mở lại notebook và chạy các cell từ đầu với `RESUME = True` (mặc định). Nó sẽ bỏ qua các sample đã có trong `manifest.jsonl`.
+
+Chỉ dùng `--overwrite` khi chủ động tạo lại toàn bộ artifact. Thêm `--source-checksum` nếu cần SHA-256 từng PCAP để xác minh nguồn, đổi lại thời gian chạy sẽ lâu hơn.
+
+## 16. Việc cần làm tiếp
 
 1. Chạy lại notebook với cấu hình hiện tại: toàn bộ `45` nhãn, `10` known key, `35` unknown key, SupCon `8` epoch và binary MLP `16` epoch.
 2. Export output notebook sang `MLP-Classfication/code/RUN_LOG.md` sau khi chạy xong.
@@ -818,3 +848,18 @@ Nhưng cấu hình full dùng toàn bộ `45` nhãn và `9005` PCAP có thể t�
 6. Thêm feature packet/flow như inter-arrival time, signed packet size, protocol và TCP flags.
 7. Nếu cần đánh giá open-world nghiêm ngặt, tách riêng `unknown-calibration` và `unknown-final-test`.
 8. Khi `balanced_accuracy` và `unknown_recall` ổn định hơn, tạo `Df` ở cấp instance và chạy unlearning.
+
+## 17. Chạy train trên VM với Drive
+
+Notebook [MLP-Classfication/vm_code/train_pipeline_vm.ipynb](MLP-Classfication/vm_code/train_pipeline_vm.ipynb) chạy cùng pipeline `[256,3]` + SupCon + MLP trên CPU/GPU của VM, trong khi Google Drive là workspace lưu trữ duy nhất.
+
+Cell đầu mount Drive và đặt các path đã chốt:
+
+```text
+data   = /content/drive/MyDrive/Traffic FingerPrinting /Data/273 (lan 1)
+output = /content/drive/MyDrive/unlearning-artifacts/vm-training/experiments/<RUN_ID>
+```
+
+Notebook đặt `RUN_CONTEXT='local'` để không chạy auto-mount của pipeline gốc, còn `DEVICE_NAME='cuda:0'` dùng GPU của VM. Mỗi VM hoặc experiment phải đổi `RUN_ID`, vì cache PCAP, checkpoint và summary của một run không được ghi chung với run khác.
+
+Trước khi parse/train, notebook chạy preflight để bắt buộc kiểm tra Drive đã mount, dataset có PCAP, output ghi được và CUDA VM khả dụng. Hướng dẫn vận hành chi tiết nằm trong [MLP-Classfication/vm_code/README.md](MLP-Classfication/vm_code/README.md).
