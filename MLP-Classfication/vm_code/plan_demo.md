@@ -4,7 +4,7 @@
 
 Tạo một implementation chạy trên một VM có GPU, nhưng **toàn bộ dữ liệu và artifact bền vững nằm trên Google Drive đã mount**. VM chỉ cung cấp CPU/GPU/RAM để parse và train; khi VM bị xóa hoặc đổi máy, experiment vẫn tiếp tục được từ Drive.
 
-Đây là plan đã chốt trước khi tạo notebook train. Chưa tạo code train ở bước này.
+Plan này đã được triển khai thành `train_pipeline_vm.ipynb`. Nó là checklist để chạy và đánh giá baseline VM trước khi mở rộng sang normalized shard hoặc unlearning.
 
 ## Nguồn logic bắt buộc
 
@@ -79,9 +79,9 @@ Lý do đặt rõ `RUN_CONTEXT='local'`:
 
 Không chỉ đặt `RUN_CONTEXT=local`: phải đặt `DATA_DIR`, vì default local hiện trỏ tới `<project-root>/data/273 (200samples key)`.
 
-## Deliverable code dự kiến
+## Deliverable code đã tạo
 
-Folder `vm_code/` sau khi được chấp thuận sẽ có:
+Folder `vm_code/` hiện có:
 
 ```text
 vm_code/
@@ -90,13 +90,13 @@ vm_code/
 └── README.md                         # cách mount, chạy, resume và layout Drive
 ```
 
-`train_pipeline_vm.ipynb` là deliverable code chính và chứa trực tiếp preflight, parser, cache, SupCon, MLP, checkpoint và evaluation. Không phụ thuộc CLI ngoài notebook trong bản demo này.
+`train_pipeline_vm.ipynb` là entrypoint code chính và chứa trực tiếp preflight, parser, cache, SupCon, MLP, checkpoint và evaluation. Không phụ thuộc CLI ngoài notebook trong bản demo này.
 
 ## Các phase triển khai
 
 ### Phase 0 — Preflight VM và Drive
 
-`vm_preflight.py` sẽ kiểm tra, chỉ đọc/ghi một file test nhỏ trong output run:
+Cell preflight trong notebook kiểm tra, chỉ đọc/ghi một file test nhỏ trong output run:
 
 1. Drive mount tồn tại và có quyền đọc PCAP/ghi artifact.
 2. `scapy`, `torch`, CUDA driver và GPU VM tương thích.

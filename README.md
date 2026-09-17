@@ -74,18 +74,24 @@ unlearning/
 │   └── zero retrain.pdf
 ├── scripts/
 │   ├── colab_sync_project.sh
-│   └── colab_run_notebook.sh
+│   ├── colab_run_notebook.sh
+│   └── normalize_pcap_dataset.py
 └── MLP-Classfication/
     ├── plan.md
     ├── results.md
     ├── requirements.txt
     ├── train_pipeline.py
-    └── code/
-        ├── CHI.md
-        ├── RUN_LOG.md
-        ├── export_notebook_outputs.py
-        ├── supcon-model.ipynb
-        └── train_pipeline.ipynb
+    ├── code/
+    │   ├── CHI.md
+    │   ├── RUN_LOG.md
+    │   ├── export_notebook_outputs.py
+    │   ├── normalize_pcap_dataset.ipynb
+    │   ├── supcon-model.ipynb
+    │   └── train_pipeline.ipynb
+    └── vm_code/
+        ├── plan_demo.md
+        ├── README.md
+        └── train_pipeline_vm.ipynb
 ```
 
 Ý nghĩa chính:
@@ -102,6 +108,8 @@ unlearning/
 - `MLP-Classfication/code/supcon-model.ipynb`: notebook cũ để tham khảo hướng SupCon/embedding.
 - `scripts/colab_sync_project.sh`: đóng gói project local, upload lên Colab VM và giải nén thành folder remote.
 - `scripts/colab_run_notebook.sh`: chạy notebook chính trong folder remote trên Colab bằng Colab CLI.
+- `scripts/normalize_pcap_dataset.py` và `code/normalize_pcap_dataset.ipynb`: chuẩn hóa một dataset PCAP thành artifact shard tái sử dụng.
+- `MLP-Classfication/vm_code/train_pipeline_vm.ipynb`: pipeline train Drive-first cho VM GPU; cache, checkpoint và summary đều nằm trên Drive.
 
 ## 3. Dữ liệu Google Drive
 
@@ -160,6 +168,8 @@ Dataset baseline hiện tại:
 ```text
 /content/drive/MyDrive/Traffic FingerPrinting /Data/273 (200samples key)
 ```
+
+Baseline gốc vẫn là `273 (200samples key)`. Riêng notebook VM Drive-first được cấu hình cố định cho `273 (lan 1)` để thử nghiệm trên GPU VM mà không thay đổi representation hoặc logic model.
 
 Lý do chọn:
 
@@ -812,13 +822,13 @@ Nhưng cấu hình full dùng toàn bộ `45` nhãn và `9005` PCAP có thể t�
 
 ## 15. Chuẩn hóa PCAP thành dataset tái sử dụng
 
-Notebook Colab self-contained để chuẩn hóa `273 (lan 1)`:
+Notebook self-contained để chuẩn hóa `273 (lan 1)`:
 
 ```text
 MLP-Classfication/code/normalize_pcap_dataset.ipynb
 ```
 
-Khi muốn dùng CPU/RAM của Google Colab, mở notebook self-contained [MLP-Classfication/code/normalize_pcap_dataset.ipynb](MLP-Classfication/code/normalize_pcap_dataset.ipynb). Notebook mount Drive trong kernel Colab, chứa trực tiếp toàn bộ logic extract và không cần sync project lên `/content/unlearning`; nó không dùng RAM/CPU máy local.
+Mở [MLP-Classfication/code/normalize_pcap_dataset.ipynb](MLP-Classfication/code/normalize_pcap_dataset.ipynb) trong runtime có `drive.mount('/content/drive')`. Notebook chứa trực tiếp toàn bộ logic extract; `scripts/normalize_pcap_dataset.py` là entrypoint CLI tương đương. Cả hai giữ representation giống `train_pipeline.ipynb` và không dùng RAM/CPU máy local khi chạy trong runtime từ xa.
 
 Mặc định script đọc:
 
@@ -832,7 +842,7 @@ và tạo artifact tại:
 /content/drive/MyDrive/unlearning-artifacts/normalized/273_lan_1
 ```
 
-Artifact không lưu `known/unknown` cố định. Mỗi shard `.pt` chứa `features [B,256,3]`, `masks [B,256]`, `label_ids` và `sample_ids`; `manifest.jsonl` giữ nhãn gốc, source path, packet count, trạng thái parse và vị trí shard. `label_map.json` cung cấp ánh xạ nhãn gốc sang ID multiclass.
+Artifact không lưu `known/unknown` cố định. Mỗi shard `.pt` chứa `features [B,256,3]`, `masks [B,256]`, `label_ids` và `sample_ids`; `manifest.jsonl` giữ nhãn gốc, source path, số packet IP trước/sau cắt, trạng thái parse và vị trí shard. `label_map.json` cung cấp ánh xạ nhãn gốc sang ID multiclass; `metadata.json` ghi version extract/config và `checksums.json` kiểm tra integrity artifact.
 
 Sau khi Colab ngắt, mở lại notebook và chạy các cell từ đầu với `RESUME = True` (mặc định). Nó sẽ bỏ qua các sample đã có trong `manifest.jsonl`.
 
@@ -860,6 +870,6 @@ data   = /content/drive/MyDrive/Traffic FingerPrinting /Data/273 (lan 1)
 output = /content/drive/MyDrive/unlearning-artifacts/vm-training/experiments/<RUN_ID>
 ```
 
-Notebook đặt `RUN_CONTEXT='local'` để không chạy auto-mount của pipeline gốc, còn `DEVICE_NAME='cuda:0'` dùng GPU của VM. Mỗi VM hoặc experiment phải đổi `RUN_ID`, vì cache PCAP, checkpoint và summary của một run không được ghi chung với run khác.
+Notebook đặt `RUN_CONTEXT='local'` để không chạy auto-mount của pipeline gốc, còn `DEVICE_NAME='cuda:0'` dùng GPU của VM. Cần chạy cell theo thứ tự: mount/config Drive → dependency → config pipeline → preflight → parser/train/evaluate. Preflight bắt buộc Drive mount đúng, dataset có PCAP, output ghi được và CUDA GPU sẵn sàng trước khi cache/train bắt đầu.
 
-Trước khi parse/train, notebook chạy preflight để bắt buộc kiểm tra Drive đã mount, dataset có PCAP, output ghi được và CUDA VM khả dụng. Hướng dẫn vận hành chi tiết nằm trong [MLP-Classfication/vm_code/README.md](MLP-Classfication/vm_code/README.md).
+Mỗi VM hoặc experiment phải đổi `RUN_ID`, vì cache PCAP, checkpoint và summary của một run không được ghi chung với run khác. Raw PCAP có thể dùng chung chỉ-đọc; không chạy đồng thời hai VM vào cùng `OUTPUT_DIR`. Hướng dẫn vận hành chi tiết nằm trong [MLP-Classfication/vm_code/README.md](MLP-Classfication/vm_code/README.md); kế hoạch/tiêu chí quick run nằm trong [MLP-Classfication/vm_code/plan_demo.md](MLP-Classfication/vm_code/plan_demo.md).
