@@ -1,97 +1,67 @@
-# Plan — Train và unlearning PCAP trên VM-local
+# Plan — VM-local CSV classification and unlearning
 
-## Mục tiêu
+## Data source
 
-Chạy toàn bộ pipeline trực tiếp trên ổ đĩa local của máy ảo: đọc PCAP từ hai đường dẫn local, dùng CPU/GPU của VM để extract/train, và ghi cache/checkpoint/kết quả vào `./artifacts/`. Pipeline không mount Google Drive và không phụ thuộc Colab.
-
-Hai biến cần người chạy sửa trong cell đầu của `train_pipeline_vm.ipynb` là:
-
-```python
-AOL_DATASET_DIR = Path('/CHANGE_ME/AOL')
-UNKNOWN_273_DATASET_DIR = Path('/CHANGE_ME/273')
-```
-
-`AOL` là `known` (binary label `0`); `273` là `unknown` (binary label `1`). Cả hai nguồn đều tham gia train/validation/test MLP.
-
-## Input và encoder đã train
-
-Checkpoint `weight_trained/pretrain_AOL.pth` là encoder SupCon cũ, không có MLP classifier. Notebook nạp strict phần `encoder.*` từ checkpoint này và phải dùng đúng contract sau:
+The VM reads only local processed CSV files:
 
 ```text
-one PCAP -> [10000, 3] float32
-row       = [relative_time_seconds, direction, raw_packet_size]
-direction = 0 nếu src là local IP suy ra từ PCAP, ngược lại 1
+known AOL:    /home/ubuntu/Documents/KF/data_processed/AOL_csv/icloud
+unknown 273:  /home/ubuntu/Documents/KF/data_processed/icloud_100
 ```
 
-PCAP ngắn được zero-pad; `mask [10000]` được dùng để mask phần padding. MLP binary mới được khởi tạo và train trên embedding 256 chiều của encoder.
+Each source contains `train_data.csv`, `test_data.csv`, and `label_mapping.csv`.
+`label_mapping.csv` maps `label_name` to `label_id`. Each data row has 40,000 numeric values and no header:
 
-Không được nạp checkpoint này vào encoder `[256,3]` của pipeline cũ hoặc dùng `strict=False` để bỏ qua mismatch kiến trúc.
+```text
+[label_id, relative_time, direction, packet_size] × 10,000
+```
 
-## Split và đánh giá base model
+The label is repeated per packet. The loader reshapes each row to `[10000,4]`, validates the label column, then removes it to give the model `[10000,3] = [relative_time, direction, raw_packet_size]`.
 
-- Split xác định theo `(source, parent-folder label)`: xấp xỉ 70% train, 15% validation, 15% test; một folder có mặt ở cả ba split khi đủ sample.
-- `split_manifest.json` lưu source, original label, binary label, path và split cho từng PCAP.
-- Mặc định encoder được freeze, chỉ MLP classifier được train. Có thể bật `FREEZE_ENCODER_FOR_BASE_TRAINING=False` để fine-tune toàn bộ sau khi có baseline.
-- Threshold của output `unknown` được chọn trên validation, sau đó test chỉ chạy một lần với threshold đã chọn.
+## Split protocol
 
-Lưu ý khoa học: AOL-vs-273 có thể đo phân biệt nguồn/capture provenance hơn là khái niệm open-world tổng quát. Kết quả cần được diễn giải là baseline hai nguồn; nên đánh giá thêm unknown source thứ ba về sau.
+- `test_data.csv` is a fixed final test set and is never used to select parameters.
+- `train_data.csv` is split deterministically by `(source, original_label)` into 85% train and 15% validation.
+- AOL records always receive binary target `known=0`; `icloud_100` records always receive `unknown=1`.
+- Original labels are retained for class-level forgetting.
 
-## Layout artifact local
+Validation is required to choose the unknown threshold, base-training epoch, and unlearning epoch without contaminating final test results.
+
+## Resource behaviour
+
+The CSV files are about 1 GB each. The notebook first makes a small byte-offset index, then seeks and parses exactly one row per sample. It does not load the whole CSV into RAM. An optional local tensor cache accelerates later epochs:
 
 ```text
 ./artifacts/vm-training/experiments/<RUN_ID>/
-├── feature_cache/             # một cache tensor cho mỗi PCAP
-├── preflight/local_write_probe.txt
-├── label_inventory.json
+├── csv_index.json
 ├── split_manifest.json
-├── base_model/
-│   ├── README.md
-│   ├── label_map.json
-│   ├── binary_training_latest.pt
-│   ├── binary_training_best.pt
-│   └── best_model.pt
+├── feature_cache/
+├── base_model/best_model.pt
+├── base_model/README.md
 ├── run_summary.json
-├── run_summary.md
-└── unlearning/                # chỉ có khi RUN_UNLEARNING=True
-    ├── summary.json
-    ├── head_only/
-    ├── last_encoder_block/
-    └── full_encoder_and_head/
+└── unlearning/
 ```
 
-Mỗi VM/run dùng `RUN_ID` khác nhau để không ghi đè cache hay checkpoint. Raw PCAP không bị sửa.
+Raw CSV files are read-only and all output remains local to the VM.
 
-## Phase 3 — class-level unlearning baseline
+## Model and unlearning
 
-`FORGET_LABEL` là tên một folder con của AOL. Khi để `None`, notebook chọn cố định theo `SEED` một AOL label có đủ dữ liệu train/validation/test.
+`weight_trained/pretrain_AOL.pth` is loaded strictly into the legacy `RawPacketEncoder`. Its expected raw input is exactly `[10000,3]`, so this processed CSV format is compatible. A new binary MLP is trained on both AOL and 273 source records.
 
-Với label cần quên `B`:
+For a forgotten AOL folder label `B`:
 
 ```text
-Df = AOL records có parent-folder label B
-Dr = AOL records có label khác B + toàn bộ 273 records
+Df = AOL samples with original label B
+Dr = all remaining AOL samples + all 273 samples
+loss = CE(Df, unknown=1) + lambda * CE(Dr, original binary label)
 ```
 
-Mục tiêu baseline có policy rõ ràng là chuyển Df thành unknown:
+The optional phase runs three update-scope baselines: `head_only`, `last_encoder_block`, and `full_encoder_and_head`. Each output is saved separately under `unlearning/`.
 
-```text
-CE(model(Df), unknown=1) + λ · CE(model(Dr), binary_label_gốc)
-```
+## Run
 
-Ba baseline chạy từ cùng `base_model/best_model.pt` trong bộ nhớ:
-
-1. `head_only`: chỉ MLP classifier cập nhật.
-2. `last_encoder_block`: block encoder cuối, FC encoder và MLP cập nhật.
-3. `full_encoder_and_head`: toàn bộ encoder và MLP cập nhật.
-
-Validation chọn epoch tốt nhất theo trung bình của `Df -> unknown rate` và retain balanced accuracy. Test báo cáo hai phần riêng: tỷ lệ forget thành unknown trên Df-test, và binary metrics trên Dr-test. Mỗi baseline ghi `unlearned_model.pt`, `result.json`, `README.md` vào thư mục riêng.
-
-Đây là relabel-to-unknown baseline có kiểm soát; không phải chứng minh certified machine unlearning. ADV/MAS và các baseline từ paper sẽ là bước mở rộng sau khi baseline này ổn định.
-
-## Cách chạy
-
-1. Mở notebook trên Jupyter của VM, sửa đúng hai đường dẫn dataset và kiểm tra `PRETRAIN_AOL_PATH`.
-2. Chọn GPU cho kernel. Nếu chỉ debug CPU, đặt `REQUIRE_CUDA=False` và `DEVICE_NAME=''`.
-3. Run All với `RUN_UNLEARNING=False` để tạo base model.
-4. Xem `run_summary.md`, `base_model/README.md` và split manifest.
-5. Đặt `RUN_UNLEARNING=True`; tùy chọn đặt `FORGET_LABEL='ten_folder_AOL'`; chạy lại từ đầu để tạo ba artifact unlearning.
+1. Clone the repository on the GPU VM.
+2. Confirm the two paths in the first notebook cell; they are already set to the supplied paths.
+3. Run the notebook with `RUN_UNLEARNING=False` to make the base model.
+4. Inspect `run_summary.json` and keep test results untouched.
+5. Set `RUN_UNLEARNING=True`, optionally set `FORGET_LABEL`, then run again to compare the three baselines.
