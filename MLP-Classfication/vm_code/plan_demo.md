@@ -1,175 +1,97 @@
-# Plan — Train PCAP trên VM với Google Drive là workspace
+# Plan — Train và unlearning PCAP trên VM-local
 
-## Mục đích
+## Mục tiêu
 
-Tạo một implementation chạy trên một VM có GPU, nhưng **toàn bộ dữ liệu và artifact bền vững nằm trên Google Drive đã mount**. VM chỉ cung cấp CPU/GPU/RAM để parse và train; khi VM bị xóa hoặc đổi máy, experiment vẫn tiếp tục được từ Drive.
+Chạy toàn bộ pipeline trực tiếp trên ổ đĩa local của máy ảo: đọc PCAP từ hai đường dẫn local, dùng CPU/GPU của VM để extract/train, và ghi cache/checkpoint/kết quả vào `./artifacts/`. Pipeline không mount Google Drive và không phụ thuộc Colab.
 
-Plan này đã được triển khai thành `train_pipeline_vm.ipynb`. Nó là checklist để chạy và đánh giá baseline VM trước khi mở rộng sang normalized shard hoặc unlearning.
-
-## Nguồn logic bắt buộc
-
-| Nguồn | Vai trò trong bản VM |
-| --- | --- |
-| `code/train_pipeline.ipynb` | Nguồn logic chính: config runtime, parser `[256,3]`, split nhãn, SupCon, MLP binary, checkpoint, threshold sweep. |
-| `code/supcon-model.ipynb` | Tham khảo DF-style `RawPacketEncoder`, SupCon projection head và checkpoint encoder. Không lấy lại các parser/feature cũ. |
-| `plan.md` | Đặc tả thí nghiệm: one-PCAP-one-sample, original label, open-world split, metric và unlearning. |
-
-`train_pipeline.ipynb` là source of truth cho feature hiện tại:
-
-```text
-[log1p(relative_time), direction, log1p(packet_size) / log1p(65535)]
-features: [256, 3] float32
-mask:     [256] bool
-```
-
-## Topology Drive-first đã chốt
-
-Google Drive được mount bằng:
+Hai biến cần người chạy sửa trong cell đầu của `train_pipeline_vm.ipynb` là:
 
 ```python
-from google.colab import drive
-drive.mount('/content/drive')
+AOL_DATASET_DIR = Path('/CHANGE_ME/AOL')
+UNKNOWN_273_DATASET_DIR = Path('/CHANGE_ME/273')
 ```
 
-Mount layout được chốt có tầng `MyDrive`:
+`AOL` là `known` (binary label `0`); `273` là `unknown` (binary label `1`). Cả hai nguồn đều tham gia train/validation/test MLP.
+
+## Input và encoder đã train
+
+Checkpoint `weight_trained/pretrain_AOL.pth` là encoder SupCon cũ, không có MLP classifier. Notebook nạp strict phần `encoder.*` từ checkpoint này và phải dùng đúng contract sau:
 
 ```text
-/content/drive/MyDrive/
-├── Traffic FingerPrinting /Data/273 (lan 1)/     # PCAP baseline, chỉ đọc
-└── unlearning-artifacts/
-    └── vm-training/
-        ├── normalized/                            # tùy chọn: shard dataset tái sử dụng
-        ├── experiments/
-        │   ├── vm-a_seed42/
-        │   │   ├── feature_cache/
-        │   │   ├── label_inventory.json
-        │   │   ├── label_split_*.json
-        │   │   ├── supcon_encoder_*.pt
-        │   │   ├── binary_training_*.pt
-        │   │   ├── best_model.pt
-        │   │   ├── run_summary.json
-        │   │   └── logs/
-        │   └── vm-b_seed43/
-        └── forget-lists/
+one PCAP -> [10000, 3] float32
+row       = [relative_time_seconds, direction, raw_packet_size]
+direction = 0 nếu src là local IP suy ra từ PCAP, ngược lại 1
 ```
 
-- Raw PCAP và normalized shards dùng chung ở chế độ read-only.
-- Mỗi VM/run bắt buộc có `OUTPUT_DIR` riêng; không để nhiều VM cùng ghi một `feature_cache`, checkpoint hoặc summary.
-- Drive mount có thể chậm với hàng nghìn file nhỏ, nhưng vẫn là workspace hợp lệ theo yêu cầu. Cache/shard tồn tại trên Drive để lần sau không parse lại.
+PCAP ngắn được zero-pad; `mask [10000]` được dùng để mask phần padding. MLP binary mới được khởi tạo và train trên embedding 256 chiều của encoder.
 
-## Runtime configuration của notebook hiện tại
+Không được nạp checkpoint này vào encoder `[256,3]` của pipeline cũ hoặc dùng `strict=False` để bỏ qua mismatch kiến trúc.
 
-Notebook hiện đã hỗ trợ mode local. Trước cell cấu hình runtime, thêm một cell setup trên VM:
+## Split và đánh giá base model
 
-```python
-import os
+- Split xác định theo `(source, parent-folder label)`: xấp xỉ 70% train, 15% validation, 15% test; một folder có mặt ở cả ba split khi đủ sample.
+- `split_manifest.json` lưu source, original label, binary label, path và split cho từng PCAP.
+- Mặc định encoder được freeze, chỉ MLP classifier được train. Có thể bật `FREEZE_ENCODER_FOR_BASE_TRAINING=False` để fine-tune toàn bộ sau khi có baseline.
+- Threshold của output `unknown` được chọn trên validation, sau đó test chỉ chạy một lần với threshold đã chọn.
 
-os.environ['RUN_CONTEXT'] = 'local'
-os.environ['DATA_DIR'] = '/content/drive/MyDrive/Traffic FingerPrinting /Data/273 (lan 1)'
-os.environ['OUTPUT_DIR'] = '/content/drive/MyDrive/unlearning-artifacts/vm-training/experiments/vm-a_seed42'
-os.environ['DEVICE_NAME'] = 'cuda:0'
-```
+Lưu ý khoa học: AOL-vs-273 có thể đo phân biệt nguồn/capture provenance hơn là khái niệm open-world tổng quát. Kết quả cần được diễn giải là baseline hai nguồn; nên đánh giá thêm unknown source thứ ba về sau.
 
-Lý do đặt rõ `RUN_CONTEXT='local'`:
-
-- không gọi `google.colab.drive.mount()`;
-- không dùng hard-coded `/content/drive/...`;
-- GPU vẫn được chọn từ VM qua `torch.cuda.is_available()`;
-- `REQUIRE_CUDA=True` phải giữ nguyên trong run chính thức để dừng sớm nếu PyTorch/CUDA không nhận GPU.
-
-Không chỉ đặt `RUN_CONTEXT=local`: phải đặt `DATA_DIR`, vì default local hiện trỏ tới `<project-root>/data/273 (200samples key)`.
-
-## Deliverable code đã tạo
-
-Folder `vm_code/` hiện có:
+## Layout artifact local
 
 ```text
-vm_code/
-├── plan_demo.md
-├── train_pipeline_vm.ipynb
-└── README.md                         # cách mount, chạy, resume và layout Drive
+./artifacts/vm-training/experiments/<RUN_ID>/
+├── feature_cache/             # một cache tensor cho mỗi PCAP
+├── preflight/local_write_probe.txt
+├── label_inventory.json
+├── split_manifest.json
+├── base_model/
+│   ├── README.md
+│   ├── label_map.json
+│   ├── binary_training_latest.pt
+│   ├── binary_training_best.pt
+│   └── best_model.pt
+├── run_summary.json
+├── run_summary.md
+└── unlearning/                # chỉ có khi RUN_UNLEARNING=True
+    ├── summary.json
+    ├── head_only/
+    ├── last_encoder_block/
+    └── full_encoder_and_head/
 ```
 
-`train_pipeline_vm.ipynb` là entrypoint code chính và chứa trực tiếp preflight, parser, cache, SupCon, MLP, checkpoint và evaluation. Không phụ thuộc CLI ngoài notebook trong bản demo này.
+Mỗi VM/run dùng `RUN_ID` khác nhau để không ghi đè cache hay checkpoint. Raw PCAP không bị sửa.
 
-## Các phase triển khai
+## Phase 3 — class-level unlearning baseline
 
-### Phase 0 — Preflight VM và Drive
+`FORGET_LABEL` là tên một folder con của AOL. Khi để `None`, notebook chọn cố định theo `SEED` một AOL label có đủ dữ liệu train/validation/test.
 
-Cell preflight trong notebook kiểm tra, chỉ đọc/ghi một file test nhỏ trong output run:
-
-1. Drive mount tồn tại và có quyền đọc PCAP/ghi artifact.
-2. `scapy`, `torch`, CUDA driver và GPU VM tương thích.
-3. `torch.cuda.is_available() == True`; in tên GPU, VRAM và PyTorch CUDA version.
-4. Quét vài PCAP mẫu để kiểm tra có IPv4/IPv6 packet.
-5. In đường dẫn tuyệt đối data/output, tránh ghi nhầm run khác.
-
-Không train khi bất kỳ điều kiện bắt buộc nào thất bại.
-
-### Phase 1 — Mirror pipeline hiện tại trên VM với cache PCAP trên Drive
-
-Giữ đúng logic `train_pipeline.ipynb`:
-
-1. Scan `<label>/*.pcap`; `original_label = parent.name`.
-2. Lưu `label_inventory.json` vào `OUTPUT_DIR`.
-3. Split class theo seed thành known / unknown / optional holdout unknown.
-4. Parse PCAP lazy và cache `{features, mask}` cho từng PCAP vào `OUTPUT_DIR/feature_cache/` trên Drive. Đây là lựa chọn đã chốt cho baseline VM.
-5. SupCon pretrain chỉ known train records; checkpoint định kỳ lên Drive.
-6. Freeze encoder, train MLP binary known/unknown.
-7. Sweep threshold trên validation; evaluate test; lưu metrics và checkpoint tốt nhất.
-
-Kết quả Phase 1 phải tương thích checkpoint/config với pipeline hiện tại.
-
-### Phase 2 — Normalized dataset shared trên Drive (mở rộng sau baseline)
-
-Sau một run baseline ổn định, thay cache hàng nghìn file bằng artifact chuẩn đã thảo luận:
+Với label cần quên `B`:
 
 ```text
-normalized/<dataset-id>/
-├── metadata.json
-├── label_map.json
-├── manifest.jsonl
-└── shards/shard-*.pt
+Df = AOL records có parent-folder label B
+Dr = AOL records có label khác B + toàn bộ 273 records
 ```
 
-`original_label`, `sample_id`, relative path, `features`, mask và `label_id` được giữ. `binary_label` luôn tạo động theo label split. Phase này giảm parsing lặp lại giữa VM/run, nhưng không thay đổi model hay split protocol.
+Mục tiêu baseline có policy rõ ràng là chuyển Df thành unknown:
 
-### Phase 3 — Unlearning demo
+```text
+CE(model(Df), unknown=1) + λ · CE(model(Dr), binary_label_gốc)
+```
 
-Chỉ triển khai sau khi Phase 1 metric ổn định:
+Ba baseline chạy từ cùng `base_model/best_model.pt` trong bộ nhớ:
 
-1. `forget_list` nhận `sample_id`/relative PCAP path hoặc original label.
-2. Tạo `Df` và `Dr` chỉ từ train records.
-3. Load `best_model.pt`, dùng targeted relabeling/flip target trên `Df`, retain loss + weight-importance anchor trên `Dr`.
-4. Lưu checkpoint mới, `unlearning_result.json` và metric forget/retain/test trong folder experiment riêng.
+1. `head_only`: chỉ MLP classifier cập nhật.
+2. `last_encoder_block`: block encoder cuối, FC encoder và MLP cập nhật.
+3. `full_encoder_and_head`: toàn bộ encoder và MLP cập nhật.
 
-## GPU/CPU và nhiều VM
+Validation chọn epoch tốt nhất theo trung bình của `Df -> unknown rate` và retain balanced accuracy. Test báo cáo hai phần riêng: tỷ lệ forget thành unknown trên Df-test, và binary metrics trên Dr-test. Mỗi baseline ghi `unlearned_model.pt`, `result.json`, `README.md` vào thư mục riêng.
 
-- Một run dùng một GPU VM (`cuda:0`) trước; parser/cache chạy CPU, model chạy GPU.
-- Current pipeline chưa dùng distributed data parallel. Nhiều VM nên chạy experiment độc lập theo seed, split, hyperparameter hoặc dataset.
-- Không để hai VM resume cùng một checkpoint hoặc dùng cùng `OUTPUT_DIR`.
+Đây là relabel-to-unknown baseline có kiểm soát; không phải chứng minh certified machine unlearning. ADV/MAS và các baseline từ paper sẽ là bước mở rộng sau khi baseline này ổn định.
 
-## Safety và resume
+## Cách chạy
 
-- Checkpoint lưu atomic: ghi file tạm trong cùng folder Drive rồi rename.
-- Resume chỉ được phép khi `feature_config`, label split, model config và dataset path khớp metadata của run trước.
-- Nếu Drive mount ngắt, dừng run; không tiếp tục ghi artifact nửa chừng. Khi mount ổn định lại, chạy resume từ checkpoint/cache còn nguyên.
-- `RUN_UNLEARNING=False` mặc định; không chạy unlearning vô tình trong classification baseline.
-
-## Acceptance criteria demo
-
-Trước full train, code VM phải chứng minh:
-
-1. Preflight nhận GPU VM và Drive mount.
-2. Một PCAP cho tensor `[256,3]` và mask `[256]` giống notebook hiện tại.
-3. Inventory và label split được lưu trên Drive.
-4. Quick run (giới hạn label/file, 1 SupCon epoch, 1 MLP epoch) ghi được checkpoint + summary lên Drive.
-5. Resume quick run không đổi label split và không parse lại cache hợp lệ.
-6. Hai VM dùng `OUTPUT_DIR` khác nhau không xung đột file.
-
-## Các quyết định đã chốt
-
-1. Mount point là `/content/drive`, với Drive data ở `/content/drive/MyDrive/`.
-2. Dataset baseline là `273 (lan 1)`.
-3. Demo code được viết trực tiếp trong `train_pipeline_vm.ipynb`.
-4. Phase 1 cache từng PCAP trên Drive; normalized shards là Phase 2 sau baseline.
+1. Mở notebook trên Jupyter của VM, sửa đúng hai đường dẫn dataset và kiểm tra `PRETRAIN_AOL_PATH`.
+2. Chọn GPU cho kernel. Nếu chỉ debug CPU, đặt `REQUIRE_CUDA=False` và `DEVICE_NAME=''`.
+3. Run All với `RUN_UNLEARNING=False` để tạo base model.
+4. Xem `run_summary.md`, `base_model/README.md` và split manifest.
+5. Đặt `RUN_UNLEARNING=True`; tùy chọn đặt `FORGET_LABEL='ten_folder_AOL'`; chạy lại từ đầu để tạo ba artifact unlearning.
