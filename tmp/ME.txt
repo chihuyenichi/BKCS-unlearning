@@ -1,0 +1,47 @@
+
+2 dataset (gồm những nhãn, các nhãn gồm các file .pcap) đều phải chia thành train/ validation/ test 
+    AOL (AOL csv) -> known 
+    273 (icloud 100) -> unknown 
+
+encoder (cho ta trọng số để biểu diễn input) (embedding) (train từ tập train của dataset known : AOL (lan 1))
+
+MLP: giúp phân loại, dựa trên tập train, thuộc cả 2 dataset 
+    đây là quá trình train 
+
+    gồm nhiều lớp 
+        mỗi lớp đặc trưng bởi w_i, b_i với : 
+            w_i: ma trận trọng số 
+            b_i: bias  
+
+        a_(i+1) = W_i × h_i + b_i
+        h_(i+1) = activation(a_(i+1))
+
+        Tầng cuối trả logits; softmax đổi logits thành xác suất.
+        
+        gồm cả hàm kịch hoạt (phi tuyến tính) -> giúp học được các đặc trưng 
+        loss giúp tối ưu các w[i] và b[i] 
+
+Test: sử dụng dataset 273 (lan 1) với nhãn là unkown, 
+    accuracy : độ chính xác khi phân loại được các known 
+    input được đưa qua encoder -> vector đặc trưng 
+    sau đó được phân loại bằng MLP, dựa vào hàm xác suất và các ngưỡng (threshold) tốt nhất sau khi train 
+
+unlearn: 
+    train (cập nhật trọng số) từ MLP head -> MLP -> encoder, lần lượt để đánh giá sự ổn định 
+        quên được tập cần quên 
+        giữ được accurcay trên các tập còn lại  
+
+    khi test: với bài toán phân loại nhị phân known/ unknown, 
+        giả sử ta yêu cầu quên tập dữ liệu B, 
+            khi test, với input là data thuộc nhãn B, thì output sẽ trả về unknown, 
+            accuracy của các data thuộc tập còn lại (known) cần giữ ổn định  
+            
+            
+--------------------------
+
+1. 
+
+
+
+        
+
