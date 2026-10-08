@@ -1,10 +1,8 @@
-# Báo cáo kết quả group-wise unlearning trên máy ảo — lần chạy trước
+# Báo cáo kết quả group-wise unlearning trên máy ảo
 
 Nguồn số liệu chính: `MLP-Classfication/vm_code/out_data/vm_outputs.json`.
 
-File `last_run_results_summary.csv` được giữ để tham chiếu lần chạy single-label cũ hơn. Báo cáo này dựa trên `vm_outputs.json`, tương ứng với cell cuối của notebook hiện được lưu tại [../non-vm-code/train_pipeline_vm.ipynb](../non-vm-code/train_pipeline_vm.ipynb): chạy nested group-unlearning với số nhãn cần quên lần lượt là `1`, `4`, và `8`.
-
-Đây là kết quả của pipeline trước, không phải benchmark của `instance_wise/train_instance_wise.ipynb`. Các path và cấu hình bên dưới mô tả lần chạy lịch sử trên VM. Target unknown ở đây đo hành vi đổi dự đoán; kết quả này chưa chứng minh xóa ảnh hưởng dữ liệu hoặc bảo đảm privacy.
+Báo cáo sử dụng protocol nested group-unlearning với số nhãn cần quên lần lượt là `1`, `4`, và `8`. Các path và cấu hình bên dưới mô tả thí nghiệm trên VM. Target unknown đo hành vi đổi dự đoán; kết quả này chưa chứng minh xóa ảnh hưởng dữ liệu hoặc bảo đảm privacy.
 
 ## 1. Mục tiêu thí nghiệm
 
@@ -254,11 +252,11 @@ Nếu chọn baseline theo mục tiêu:
 - Mục tiêu cân bằng và can thiệp vừa phải: chọn `last_encoder_block`.
 - Mục tiêu giữ performance trên `Dr` tốt nhất khi quên nhiều nhãn: chọn `full_encoder_and_head`.
 
-Trong lần chạy này, `last_encoder_block` là một cấu hình tham khảo để cân bằng quên/giữ; kịch bản quên 8 nhãn nên báo cáo thêm `full_encoder_and_head` vì retain performance tốt hơn. Mốc baseline trước unlearning vẫn là model gốc encoder + MLP. Ba scope cùng dùng một objective CE, không phải ba method unlearning độc lập. Chưa suy ra lựa chọn tối ưu cho instance-wise hoặc xếp hạng method mới từ báo cáo này.
+Trong lần chạy này, `last_encoder_block` là một cấu hình tham khảo để cân bằng quên/giữ; kịch bản quên 8 nhãn nên báo cáo thêm `full_encoder_and_head` vì retain performance tốt hơn. Mốc baseline trước unlearning là model gốc encoder + MLP. Ba scope cùng dùng một objective CE và biểu thị phạm vi trọng số được cập nhật.
 
 ## 11. Lưu ý về resume và artifact
 
-Trong pipeline trước, base model đã có cơ chế reuse:
+Base model được tái sử dụng từ checkpoint:
 
 ```text
 base_model/best_model.pt

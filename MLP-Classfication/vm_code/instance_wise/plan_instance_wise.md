@@ -25,7 +25,7 @@ Notebook chính là [train_instance_wise.ipynb](train_instance_wise.ipynb), ch�
 | Còn dự kiến | Retrain oracle, command `train-oracle`/`summarize`, tổng hợp mean/std tự động, artifact README riêng và targeted Blindspot. |
 | Kết quả trên VM | Cần đọc artifact của lần chạy thực tế; notebook repo chưa chứa output đã lưu, không suy ra trạng thái VM từ đó. |
 
-Các phase, checklist và acceptance criteria bên dưới là **đặc tả đích**. Checklist chưa đánh dấu không có nghĩa mọi hàm tương ứng còn thiếu; chỉ đánh dấu hoàn tất khi đã xác nhận implementation và verification cần thiết. Các kết quả trong `../out_data/` thuộc group-wise workflow trước, không xác nhận benchmark instance-wise.
+Các phase, checklist và acceptance criteria bên dưới là **đặc tả đích**. Chỉ đánh dấu checklist hoàn tất khi đã xác nhận implementation và verification cần thiết.
 
 ---
 
@@ -62,6 +62,7 @@ artifacts/vm-training/instance-wise/
 │               └── mas_anchors.pt        # khi chạy MAS
 └── forget_manifests/
     ├── forget_1.json
+    ├── forget_4.json
     ├── forget_10.json
     ├── forget_50.json
     └── forget_100.json
@@ -379,7 +380,7 @@ Mục tiêu: tạo các tập quên nested và tái lập được.
 Mặc định:
 
 ```text
-FORGET_INSTANCE_COUNTS = (1, 10, 50, 100)
+FORGET_INSTANCE_COUNTS = (1, 4, 10, 50, 100)
 ```
 
 Quy tắc chọn:
@@ -390,13 +391,14 @@ Quy tắc chọn:
 - tập lớn là prefix mở rộng của tập nhỏ:
 
 ```text
-Df_1 subset Df_10 subset Df_50 subset Df_100
+Df_1 subset Df_4 subset Df_10 subset Df_50 subset Df_100
 ```
 
 Output:
 
 ```text
 forget_manifests/forget_1.json
+forget_manifests/forget_4.json
 forget_manifests/forget_10.json
 forget_manifests/forget_50.json
 forget_manifests/forget_100.json
@@ -853,7 +855,7 @@ Command hiện có và command dự kiến:
 | `train-oracle` | Train retrain oracle | VM | Chưa triển khai |
 | `summarize` | Tổng hợp benchmark | Máy cá nhân hoặc VM | Chưa triển khai |
 
-Cấu hình notebook mặc định `RUN_PIPELINE=False` và `validate-schema`. Khi train trên VM, chọn `train-base`, bật `RUN_PIPELINE`, chạy cell cấu hình rồi cell execute. `unlearn` mặc định chỉ dùng `forget_10.json`; các count khác phải đổi manifest và chạy riêng.
+Cấu hình notebook mặc định `RUN_PIPELINE=False` và `validate-schema`. Khi train trên VM, chọn `train-base`, bật `RUN_PIPELINE`, chạy cell cấu hình rồi cell execute. `unlearn` mặc định quên 4 instance bằng `forget_4.json`; các count khác phải đổi manifest và chạy riêng.
 
 Mapping code dự kiến:
 
@@ -910,7 +912,7 @@ Notebook chỉ dùng Python standard library, NumPy và PyTorch. Full training/u
 
 1. Forget request thực tế sẽ cung cấp line number, sample ID hay đường dẫn PCAP?
 2. Có manifest nào ánh xạ CSV row về PCAP gốc không?
-3. Quy mô `Df` có giữ `(1, 10, 50, 100)` hay cần thêm theo tỷ lệ phần trăm?
+3. Benchmark dùng các count `(1, 4, 10, 50, 100)` hay cần thêm theo tỷ lệ phần trăm? Count mặc định khi chạy unlearning là 4.
 4. Strict experiment có cấm dùng `Dr` cả trong model selection/early stopping không, hay chỉ cấm trong loss?
 5. Khi triển khai oracle, giữ cùng cấu hình base đã chọn; nếu cần oracle full encoder+MLP hoặc encoder pretrain loại `Df`, báo cáo như một protocol riêng và xác minh provenance.
 

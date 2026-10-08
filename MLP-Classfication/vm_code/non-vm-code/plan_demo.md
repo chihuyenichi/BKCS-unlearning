@@ -1,6 +1,6 @@
 # Plan — VM-local CSV classification and unlearning
 
-This is the archived plan for [train_pipeline_vm.ipynb](train_pipeline_vm.ipynb), the earlier group-wise workflow. The current entrypoint and instance-wise protocol are documented in [../README.md](../README.md) and [../instance_wise/plan_instance_wise.md](../instance_wise/plan_instance_wise.md). The folder name does not change the runtime: this archived notebook also reads VM-local CSV data when run.
+This plan describes [train_pipeline_vm.ipynb](train_pipeline_vm.ipynb), a group-wise unlearning workflow running on VM-local CSV data.
 
 ## Data source
 
@@ -48,7 +48,7 @@ Raw CSV files are read-only and all output remains local to the VM.
 
 ## Model and unlearning
 
-`MLP-Classfication/vm_code/weight_encoder_trained/pretrain_AOL.pth` is loaded strictly into the legacy `RawPacketEncoder`. Its expected raw input is exactly `[10000,3]`, so this processed CSV format is compatible. A new binary MLP is trained on both AOL and 273 source records. The updated path configuration detects the repository root, including when Jupyter starts in the notebook folder.
+`MLP-Classfication/vm_code/weight_encoder_trained/pretrain_AOL.pth` is loaded strictly into `RawPacketEncoder`. Its expected raw input is exactly `[10000,3]`. A binary MLP is trained on both AOL and 273 source records. The path configuration detects the repository root, including when Jupyter starts in the notebook folder.
 
 For a forgotten AOL folder label `B`:
 
@@ -68,4 +68,4 @@ The optional phase runs three update-scope baselines: `head_only`, `last_encoder
 4. Inspect `run_summary.json` and keep test results untouched.
 5. Set `RUN_UNLEARNING=True`, configure `FORGET_LABEL_COUNTS` and `FORGET_LABEL_SEED`, then run again to compare the three update scopes. The saved run used nested groups of 1, 4, and 8 labels, with 3 repeats each.
 
-The default output is now resolved under `<repo>/artifacts/vm-training/experiments/<RUN_ID>/`. Historical outputs were saved under a different working directory; their absolute paths remain provenance of that run. Use a new `RUN_ID` to keep a new run separate from an existing one. The output stored in the archived notebook is historical, not a validation run of its updated paths.
+The default output is resolved under `<repo>/artifacts/vm-training/experiments/<RUN_ID>/`. Use a distinct `RUN_ID` for each experiment to keep its artifacts separate.

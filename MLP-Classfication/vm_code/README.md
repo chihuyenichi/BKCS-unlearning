@@ -1,10 +1,10 @@
 # Pipeline phân loại và instance-wise unlearning trên máy ảo
 
-`vm_code` chứa code để chạy bằng CPU/GPU của **máy ảo (VM)**. Code được phát triển/review trên máy cá nhân, cập nhật qua Git, rồi chạy trên VM với dataset local đã được cung cấp. Dữ liệu đầu vào, cache và kết quả thí nghiệm đều nằm trên filesystem của VM; workflow hiện tại không cần mount Google Drive.
+`vm_code` chứa code để chạy bằng CPU/GPU của **máy ảo (VM)**. Code được phát triển/review trên máy cá nhân, cập nhật qua Git, rồi chạy trên VM với dataset local đã được cung cấp. Dữ liệu đầu vào, cache và kết quả thí nghiệm đều nằm trên filesystem của VM.
 
 Notebook chính là [instance_wise/train_instance_wise.ipynb](instance_wise/train_instance_wise.ipynb), với kế hoạch tại [instance_wise/plan_instance_wise.md](instance_wise/plan_instance_wise.md). README này mô tả implementation hiện có; các đầu việc trong plan chưa chắc đã được triển khai.
 
-## 1. Cấu trúc thư mục và phiên bản pipeline
+## 1. Cấu trúc thư mục
 
 | Đường dẫn | Vai trò |
 | --- | --- |
@@ -12,11 +12,9 @@ Notebook chính là [instance_wise/train_instance_wise.ipynb](instance_wise/trai
 | `instance_wise/plan_instance_wise.md` | Đặc tả instance-wise, protocol đánh giá và backlog. |
 | `instance_wise/requirements.txt` | Dependency Python của notebook. |
 | `weight_encoder_trained/` | Checkpoint encoder SupCon pretrained; chưa có binary MLP đã train. |
-| `non-vm-code/train_pipeline_vm.ipynb` | Pipeline trước được giữ để tham khảo; báo cáo cũ dùng thí nghiệm quên theo nhóm nhãn. |
-| `non-vm-code/plan_demo.md` | Plan của pipeline trước. |
-| `out_data/` | Output đã xuất từ lần chạy VM trước, báo cáo tiếng Việt và CSV giải thích kết quả. |
+| `out_data/` | Output từ các thí nghiệm trên VM, báo cáo tiếng Việt và CSV giải thích kết quả. |
 
-Notebook instance-wise dùng `RUN_PIPELINE` và `NOTEBOOK_COMMAND`. Biến `RUN_UNLEARNING` thuộc notebook trước, không dùng để điều khiển notebook instance-wise.
+Notebook instance-wise dùng `RUN_PIPELINE` và `NOTEBOOK_COMMAND` để điều khiển phase thực thi.
 
 ## 2. Dataset local trên VM
 
@@ -42,7 +40,7 @@ Mỗi dòng CSV không có header, gồm 40.000 giá trị:
     → bỏ cột label, giữ features [10000, 3] + mask [10000]
 ```
 
-Feature dùng `legacy_raw_v1`, giữ giá trị time/direction/packet size theo contract của encoder pretrained. Không chuyển input thành `[256, 3]`; **256 là chiều embedding đầu ra encoder**. Padding được nhận diện bằng `packet_size == 0`, kể cả khi `label_id == 0`.
+Feature dùng `legacy_raw_v1`, giữ giá trị time/direction/packet size theo contract của encoder pretrained. Input có shape `[10000,3]`; **256 là chiều embedding đầu ra encoder**. Padding được nhận diện bằng `packet_size == 0`, kể cả khi `label_id == 0`.
 
 Một dòng CSV là một model instance. Nhãn gốc được giữ trong metadata để chia split và đánh giá ảnh hưởng trên các mẫu cùng nhãn. Notebook không trực tiếp đọc `.pcap`, và chưa có manifest ánh xạ CSV row về PCAP gốc.
 
@@ -77,11 +75,11 @@ MLP-Classfication/vm_code/weight_encoder_trained/pretrain_AOL.pth
 MLP-Classfication/vm_code/weight_encoder_trained/pretrain_273.pth
 ```
 
-Notebook, plan và notebook lưu tham khảo đã dùng tên folder `weight_encoder_trained/`. Cấu hình `train-base` dùng chung `DEFAULT_PRETRAIN`, tránh hai đường dẫn encoder độc lập bị lệch nhau.
+Cấu hình `train-base` lấy đường dẫn encoder từ `DEFAULT_PRETRAIN`, trỏ tới `weight_encoder_trained/pretrain_AOL.pth`.
 
 Notebook xác định `REPO_ROOT` từ working directory hiện tại hoặc các folder cha chứa notebook trong repo. Có thể đặt biến môi trường `BKCS_REPO_ROOT` thành đường dẫn clone trước khi khởi động Jupyter nếu kernel chạy ngoài repo. Encoder, sample và artifact mặc định đều được neo vào repo root, không phụ thuộc folder chứa notebook.
 
-Checkpoint `pretrain_AOL.pth` đã được theo dõi trong Git tại folder mới và được đồng bộ qua clone/pull. Các file `.pth` mới chưa được theo dõi vẫn bị ignore; `pretrain_273.pth` là checkpoint bổ sung local, không cần cho pipeline mặc định và không tự được đồng bộ. Xác nhận checkpoint tồn tại trên VM; notebook không tự tải checkpoint thay thế. [README encoder](weight_encoder_trained/README.md) mô tả cách nạp riêng encoder bằng `strict=True` và lý do không dùng projection head SupCon làm binary classifier.
+Checkpoint `pretrain_AOL.pth` được theo dõi trong Git và đồng bộ qua clone/pull. Các file `.pth` chưa được theo dõi bị ignore; `pretrain_273.pth` là checkpoint bổ sung local, không cần cho pipeline mặc định và không tự được đồng bộ. Xác nhận checkpoint tồn tại trên VM; notebook không tự tải checkpoint thay thế. [README encoder](weight_encoder_trained/README.md) mô tả cách nạp riêng encoder bằng `strict=True`.
 
 ## 4. Chạy notebook trên VM
 
@@ -112,14 +110,14 @@ Notebook tự xác định repo root khi Jupyter khởi tạo kernel ở repo ro
 | --- | --- | --- |
 | Tùy chọn | `validate-schema` | Kiểm tra CSV sample; mặc định dành cho máy phát triển, chỉ chạy trên VM nếu đã cấu hình sample có thật. |
 | 1 | `train-base` | Train và lưu model gốc encoder + MLP. |
-| 2 | `make-manifests` | Tạo tập quên nested gồm 1, 10, 50, 100 instance AOL từ base train. |
+| 2 | `make-manifests` | Tạo tập quên nested gồm 1, 4, 10, 50, 100 instance AOL từ base train. |
 | 3 | `unlearn` | Chạy các method/scope/repeat cho manifest được chọn. |
 
 Notebook mặc định `RUN_PIPELINE = False` và `NOTEBOOK_COMMAND = "validate-schema"`, nên **Run All với cấu hình mặc định không train model**. Để tạo model gốc trên VM, chọn `"train-base"` và bật `RUN_PIPELINE`.
 
 `make-manifests` chọn các instance AOL được model gốc dự đoán đúng là known, phân bố qua nhiều nhãn gốc. Manifest giữ instance ID, SHA-256 của row và hash checkpoint để kiểm tra đúng dữ liệu/model.
 
-Cấu hình `unlearn` mặc định chạy **`forget_10.json`**, 5 method × 3 scope × 3 repeat = 45 nhánh. Các count 1/50/100 cần đổi `--forget-manifest` rồi chạy riêng. Nên smoke test trước bằng `forget_1.json`, method `relabel_only,l2ul_mas`, scope `head_only`, `--repeats 1`, `--unlearning-epochs 1`.
+Cấu hình `unlearn` mặc định quên **4 instance**, chọn **`forget_4.json`**, 5 method × 3 scope × 3 repeat = 45 nhánh. Các count 1/10/50/100 cần đổi `--forget-manifest` rồi chạy riêng. Nên smoke test trước bằng `forget_1.json`, method `relabel_only,l2ul_mas`, scope `head_only`, `--repeats 1`, `--unlearning-epochs 1`.
 
 Cell đang chạy thường hiển thị `[*]`; log train-base có `Base epoch ...`, log unlearning có `[method/scope] epoch ...`. Run All cũng thực thi phase đã chọn nên không chạy lại khi một lượt dài vẫn đang hoạt động.
 
@@ -159,7 +157,7 @@ artifacts/vm-training/instance-wise/
 │   │   ├── best_model.pt
 │   │   └── result.json
 │   └── instance_unlearning/
-│       └── forget_10/
+│       └── forget_4/
 │           ├── adversarial_cache/         # khi chạy method Adv
 │           ├── summary.json
 │           └── <method>/<scope>/repeat_<r>/
@@ -168,6 +166,7 @@ artifacts/vm-training/instance-wise/
 │               └── mas_anchors.pt         # khi chạy method MAS
 └── forget_manifests/
     ├── forget_1.json
+    ├── forget_4.json
     ├── forget_10.json
     ├── forget_50.json
     └── forget_100.json
@@ -195,16 +194,13 @@ Validation/test được báo cáo theo các slice `same_original_label`, `other
 
 So sánh unlearning cần cùng model gốc, manifest, split và threshold. Báo cáo forget trước/sau cùng retain và ảnh hưởng lên các mẫu cùng nhãn; accuracy tổng thể riêng lẻ chưa đủ. Nếu coi unknown là lớp dương: FP là known bị nhận nhầm unknown, FN là unknown bị nhận nhầm known. Trên `Df`, dự đoán unknown là mục tiêu mới nên phải đo riêng, không coi đó là lỗi retain.
 
-[out_data/unlearning_report.md](out_data/unlearning_report.md) và [out_data/unlearning_report_readable.csv](out_data/unlearning_report_readable.csv) tổng hợp **lần chạy pipeline trước, quên theo nhóm nhãn**, không phải kết quả instance-wise. Base test của lần chạy trước đạt accuracy khoảng 95,21%, balanced accuracy 93,59%, known recall 88,89%, unknown recall 98,30% trên 14.895 mẫu. Không gán các số liệu này cho checkpoint instance-wise mới.
+Đánh giá model gốc bằng `base_run/base_model/result.json` trên VM; so sánh method bằng `instance_unlearning/<manifest>/summary.json`. Khi đọc báo cáo, dùng metadata của từng run để xác định checkpoint, forget manifest, split và protocol.
 
-Notebook instance-wise trong bản repo đã rà soát chưa chứa output đã lưu. Điều này không xác định trạng thái chạy trên VM. Muốn đánh giá model gốc mới, đọc `base_run/base_model/result.json` trên VM; muốn so sánh method, đọc `instance_unlearning/<manifest>/summary.json`.
-
-## 8. Các hướng dự kiến và thông tin chưa đồng bộ
+## 8. Hướng mở rộng
 
 - Retrain oracle, command `train-oracle`/`summarize`, tổng hợp mean/std tự động và README riêng cho từng run nằm trong plan, chưa được notebook hiện tại triển khai đầy đủ.
 - Targeted Blindspot đã được thảo luận: student bắt đầu từ model gốc, retain học theo output của frozen teacher, forget học target unknown. Notebook chưa có teacher–student/distillation loss hoặc method này.
 - Amnesiac, Blindspot nguyên bản, Boundary và MK-MMD trong bảng paper chưa được triển khai ở notebook hiện tại. Tài liệu giải thích tại [paper/vi_Unlearning_Methods_Overview.md](../../paper/vi_Unlearning_Methods_Overview.md).
-- README gốc của repo còn mô tả workflow Drive và `[256,3]` từ giai đoạn trước; cấu hình VM-local hiện tại theo README này và code instance-wise. Các tài liệu trong `vm_code` đã phân biệt implementation hiện có, kế hoạch mở rộng và thí nghiệm lịch sử.
 
 ## 9. Git và kết quả riêng trên VM
 
@@ -216,10 +212,10 @@ git pull origin main
 
 Nếu VM có chỉnh sửa chưa commit, kiểm tra `git status` và giữ lại các thay đổi đó trước khi pull. Git chỉ đồng bộ những file đã được commit; dataset local, cache và checkpoint phát sinh trên VM không tự được đồng bộ.
 
-Để chia sẻ output notebook, lưu notebook bằng Jupyter sau khi chạy hoặc cung cấp các `result.json`/`summary.json`. Script xuất output mặc định đã trỏ tới notebook instance-wise và ghi kết quả vào `artifacts/`, giữ nguyên snapshot group-wise cũ trong `out_data/`. Chạy từ repo root:
+Để chia sẻ output notebook, lưu notebook bằng Jupyter sau khi chạy hoặc cung cấp các `result.json`/`summary.json`. Script xuất output mặc định đọc notebook instance-wise và ghi kết quả vào `artifacts/`. Chạy từ repo root:
 
 ```bash
 python MLP-Classfication/vm_code/out_data/extract_vm_outputs.py
 ```
 
-Script cũng nhận `--notebook`/`--output` khi cần xuất một notebook khác. Chi tiết và provenance của các báo cáo cũ tại [out_data/README.md](out_data/README.md).
+Script nhận `--notebook`/`--output` để chỉ định nguồn và nơi lưu. Chi tiết các báo cáo tại [out_data/README.md](out_data/README.md).

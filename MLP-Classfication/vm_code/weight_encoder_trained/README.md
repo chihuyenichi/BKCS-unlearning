@@ -1,6 +1,6 @@
 # Pretrained SupCon checkpoints
 
-Folder này chứa các checkpoint PyTorch đã train trước cho representation learning. Chúng là checkpoint của kiến trúc SupCon cũ trong `MLP-Classfication/code/supcon-model.ipynb`, không phải model phân loại binary/multiclass hoàn chỉnh.
+Folder này chứa checkpoint PyTorch pretrained cho representation learning bằng SupCon, gồm CNN encoder và projection head.
 
 | File | Epoch đã lưu | Cấu hình lưu trong checkpoint | Diễn giải theo tên file |
 |---|---:|---|---|
@@ -31,7 +31,7 @@ Không có `MLPClassifier` cho output `known/unknown` hoặc original multiclass
 
 ## Kiến trúc tương thích
 
-Checkpoint khớp với `RawPacketEncoder` và `SupConPacketNet` trong `MLP-Classfication/code/supcon-model.ipynb`:
+Kiến trúc trong checkpoint gồm `RawPacketEncoder` và SupCon projection head:
 
 ```text
 input [10000, 3]
@@ -40,11 +40,11 @@ input [10000, 3]
 → SupCon head 256 → 256 → 128
 ```
 
-Các tensor có tên như `encoder.batch_norm1.*`, `encoder.max_pool_1.*` và `head.*`, tương ứng với notebook này.
+Các tensor có tên như `encoder.batch_norm1.*` và `head.*`; tên module pooling gồm `max_pool_1` đến `max_pool_4`.
 
 ## Tái sử dụng trong pipeline VM hiện tại
 
-[Notebook instance-wise](../instance_wise/train_instance_wise.ipynb) dùng `FlowEncoder` khôi phục kiến trúc encoder cũ:
+[Notebook instance-wise](../instance_wise/train_instance_wise.ipynb) dùng `FlowEncoder` tương thích checkpoint:
 
 ```text
 input [10000, 3] + packet mask
@@ -63,24 +63,11 @@ MLP-Classfication/vm_code/weight_encoder_trained/pretrain_AOL.pth
 → base_run/base_model/best_model.pt
 ```
 
-Không nạp toàn bộ SupCon `model_state_dict` trực tiếp vào `FlowModel`: `head.*` và binary `classifier.*` có vai trò khác nhau. `encoder.fc` phụ thuộc `max_packets`, nên checkpoint 10.000 packet không dùng trực tiếp với model input `[256,3]` của pipeline PCAP khác. Không dùng `strict=False` để che lỗi kiến trúc.
+Chỉ nạp các tensor `encoder.*` vào `model.encoder` bằng `strict=True`. Binary `classifier.*` được khởi tạo và huấn luyện trong phase `train-base`. Kích thước `encoder.fc` phụ thuộc `max_packets`, nên giữ input đúng `[10000,3]` theo checkpoint.
 
 `embedding_size=128` trong checkpoint là chiều projection head SupCon, còn feature encoder là 256 chiều. Folder `weight_encoder_trained` chỉ chứa encoder/projection head pretrained; model gốc hoàn chỉnh để so sánh unlearning phải được tạo bằng phase `train-base`.
 
-## Cách dùng an toàn
-
-### Resume pipeline cũ
-
-Chỉ resume khi các yếu tố sau khớp checkpoint:
-
-1. `RawPacketEncoder`/`SupConPacketNet` từ `supcon-model.ipynb`.
-2. Input `[10000, 3]`.
-3. Cùng định nghĩa ba feature: time, direction, packet size.
-4. Cùng preprocessing/normalization và data format.
-
-Khi đó có thể nạp `model_state_dict`; chỉ nạp `optimizer_state_dict` nếu muốn tiếp tục đúng optimizer state cũ. Nạp checkpoint PyTorch chỉ từ nguồn tin cậy.
-
-### Base training và unlearning trên VM
+## Base training và unlearning trên VM
 
 Notebook đã triển khai đường nạp encoder tương thích, nhưng vẫn cần xác nhận preprocessing/provenance và đánh giá holdout trên VM:
 
@@ -91,9 +78,9 @@ Notebook đã triển khai đường nạp encoder tương thích, nhưng vẫn 
 
 Không coi checkpoint này là checkpoint unlearning hoặc binary classifier đã sẵn sàng để deploy.
 
-Mặc định base training chỉ cập nhật MLP; `--fine-tune-encoder` mở cập nhật encoder. Notebook chưa resume optimizer/epoch cho base training hoặc unlearning; khả năng resume SupCon cũ mô tả ở trên không đồng nghĩa với resume các phase mới.
+Mặc định base training chỉ cập nhật MLP; `--fine-tune-encoder` mở cập nhật encoder. Notebook chưa resume optimizer/epoch cho base training hoặc unlearning.
 
-`pretrain_AOL.pth` đã được theo dõi trong Git, chuyển từ folder cũ sang `weight_encoder_trained/` và được đồng bộ qua clone/pull. `pretrain_273.pth` là checkpoint bổ sung hiện có local, chưa được theo dõi; các file `.pth` mới bị ignore theo cấu hình Git. Pipeline mặc định chỉ cần AOL. Sau clone/pull cần xác nhận checkpoint trên VM; notebook không tự tải checkpoint thay thế. Không suy ra encoder chưa từng thấy `Df` hoặc test chỉ từ tên file: cần provenance của pretraining để đánh giá điều đó.
+`pretrain_AOL.pth` được theo dõi trong Git tại `weight_encoder_trained/` và đồng bộ qua clone/pull. `pretrain_273.pth` là checkpoint bổ sung local, chưa được theo dõi; các file `.pth` chưa được theo dõi bị ignore theo cấu hình Git. Pipeline mặc định chỉ cần AOL. Sau clone/pull cần xác nhận checkpoint trên VM; notebook không tự tải checkpoint thay thế. Cần provenance của pretraining để xác định encoder đã từng thấy `Df` hoặc test hay chưa.
 
 ## Kiểm tra integrity
 
