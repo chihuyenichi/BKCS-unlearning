@@ -7,6 +7,7 @@ Ba tài liệu dưới đây là bản **tổng quan tiếng Việt**, không ph
 | `Instance-Wise Unlearning.pdf` | [Learning to Unlearn — Instance-Wise Unlearning](<vi_Instance-Wise Unlearning.md>) | Quên từng mẫu chỉ với model đã train và tập cần quên; chủ đích làm các mẫu đó bị phân loại sai. |
 | `zero retrain.pdf` | [Can Bad Teaching Induce Forgetting?](<vi_Can Bad Teaching Induce Forgetting.md>) | Teacher–student: giữ kiến thức từ smart teacher trên retain set, truyền dự đoán không đáng tin trên forget set. |
 | `Chundawat et al. - 2023 - Zero-Shot Machine Unlearning.pdf` | [Zero-Shot Machine Unlearning](<vi_Zero-Shot Machine Unlearning.md>) | Unlearn khi không còn giữ cả retain lẫn forget samples; chỉ còn model gốc và yêu cầu quên class. |
+| Tài liệu tổng hợp từ các nguồn liên quan | [Tổng quan các method unlearning](<vi_Unlearning_Methods_Overview.md>) | Giải thích Baseline, Amnesiac, Blindspot/Bad Teaching, BND/Boundary và MK-MMD; liên hệ với pipeline PCAP hiện tại. |
 
 ## Khung chung
 
