@@ -1,5 +1,7 @@
 # Plan — VM-local CSV classification and unlearning
 
+This is the archived plan for [train_pipeline_vm.ipynb](train_pipeline_vm.ipynb), the earlier group-wise workflow. The current entrypoint and instance-wise protocol are documented in [../README.md](../README.md) and [../instance_wise/plan_instance_wise.md](../instance_wise/plan_instance_wise.md). The folder name does not change the runtime: this archived notebook also reads VM-local CSV data when run.
+
 ## Data source
 
 The VM reads only local processed CSV files:
@@ -29,7 +31,7 @@ Validation is required to choose the unknown threshold, base-training epoch, and
 
 ## Resource behaviour
 
-The CSV files are about 1 GB each. The notebook first makes a small byte-offset index, then seeks and parses exactly one row per sample. It does not load the whole CSV into RAM. An optional local tensor cache accelerates later epochs:
+The supplied AOL CSV files are about 941–942 MB each; the unknown CSV files are about 1.9 GB each. The notebook first makes a byte-offset index, then seeks and parses one row per sample instead of loading the whole CSV into RAM. An optional local tensor cache accelerates later epochs:
 
 ```text
 ./artifacts/vm-training/experiments/<RUN_ID>/
@@ -46,7 +48,7 @@ Raw CSV files are read-only and all output remains local to the VM.
 
 ## Model and unlearning
 
-`weight_trained/pretrain_AOL.pth` is loaded strictly into the legacy `RawPacketEncoder`. Its expected raw input is exactly `[10000,3]`, so this processed CSV format is compatible. A new binary MLP is trained on both AOL and 273 source records.
+`MLP-Classfication/vm_code/weight_encoder_trained/pretrain_AOL.pth` is loaded strictly into the legacy `RawPacketEncoder`. Its expected raw input is exactly `[10000,3]`, so this processed CSV format is compatible. A new binary MLP is trained on both AOL and 273 source records. The updated path configuration detects the repository root, including when Jupyter starts in the notebook folder.
 
 For a forgotten AOL folder label `B`:
 
@@ -64,4 +66,6 @@ The optional phase runs three update-scope baselines: `head_only`, `last_encoder
 2. Confirm the two paths in the first notebook cell; they are already set to the supplied paths.
 3. Run the notebook with `RUN_UNLEARNING=False` to make the base model.
 4. Inspect `run_summary.json` and keep test results untouched.
-5. Set `RUN_UNLEARNING=True`, optionally set `FORGET_LABEL`, then run again to compare the three baselines.
+5. Set `RUN_UNLEARNING=True`, configure `FORGET_LABEL_COUNTS` and `FORGET_LABEL_SEED`, then run again to compare the three update scopes. The saved run used nested groups of 1, 4, and 8 labels, with 3 repeats each.
+
+The default output is now resolved under `<repo>/artifacts/vm-training/experiments/<RUN_ID>/`. Historical outputs were saved under a different working directory; their absolute paths remain provenance of that run. Use a new `RUN_ID` to keep a new run separate from an existing one. The output stored in the archived notebook is historical, not a validation run of its updated paths.

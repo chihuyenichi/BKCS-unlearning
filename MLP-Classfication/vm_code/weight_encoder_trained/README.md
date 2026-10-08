@@ -42,25 +42,30 @@ input [10000, 3]
 
 Các tensor có tên như `encoder.batch_norm1.*`, `encoder.max_pool_1.*` và `head.*`, tương ứng với notebook này.
 
-## Không tương thích trực tiếp với VM pipeline hiện tại
+## Tái sử dụng trong pipeline VM hiện tại
 
-`MLP-Classfication/vm_code/train_pipeline_vm.ipynb` đang dùng:
+[Notebook instance-wise](../instance_wise/train_instance_wise.ipynb) dùng `FlowEncoder` khôi phục kiến trúc encoder cũ:
 
 ```text
-input [256, 3]
+input [10000, 3] + packet mask
 → FlowEncoder
 → embedding 256 chiều
-→ MLPClassifier
+→ binary MLP mới
+→ known / unknown
 ```
 
-Do khác độ dài sequence, preprocessing, tên layer và kiến trúc, không nạp trực tiếp các checkpoint này vào `FlowModel` của VM pipeline:
+`load_pretrained_encoder()` kiểm tra `model_config`, lấy riêng các tensor `encoder.*`, bỏ prefix `encoder.` rồi nạp vào `model.encoder` bằng `strict=True`. SupCon projection head `head.*` không được dùng làm classifier binary. Pipeline chính dùng:
 
-```python
-# Không dùng cách này với train_pipeline_vm.ipynb:
-model.load_state_dict(checkpoint['model_state_dict'])
+```text
+MLP-Classfication/vm_code/weight_encoder_trained/pretrain_AOL.pth
+→ load_pretrained_encoder(model, checkpoint_path)
+→ freeze encoder, train MLP trên AOL known + icloud_100 unknown
+→ base_run/base_model/best_model.pt
 ```
 
-Đặc biệt, `encoder.fc` phụ thuộc vào `max_packets`; trọng số train với 10.000 packet không khớp model nhận 256 packet. Không dùng `strict=False` để bỏ qua lỗi mismatch, vì nó có thể bỏ qua các trọng số cần thiết và tạo cảm giác sai rằng đã transfer pretrained model.
+Không nạp toàn bộ SupCon `model_state_dict` trực tiếp vào `FlowModel`: `head.*` và binary `classifier.*` có vai trò khác nhau. `encoder.fc` phụ thuộc `max_packets`, nên checkpoint 10.000 packet không dùng trực tiếp với model input `[256,3]` của pipeline PCAP khác. Không dùng `strict=False` để che lỗi kiến trúc.
+
+`embedding_size=128` trong checkpoint là chiều projection head SupCon, còn feature encoder là 256 chiều. Folder `weight_encoder_trained` chỉ chứa encoder/projection head pretrained; model gốc hoàn chỉnh để so sánh unlearning phải được tạo bằng phase `train-base`.
 
 ## Cách dùng an toàn
 
@@ -75,16 +80,20 @@ Chỉ resume khi các yếu tố sau khớp checkpoint:
 
 Khi đó có thể nạp `model_state_dict`; chỉ nạp `optimizer_state_dict` nếu muốn tiếp tục đúng optimizer state cũ. Nạp checkpoint PyTorch chỉ từ nguồn tin cậy.
 
-### Chuyển sang VM pipeline
+### Base training và unlearning trên VM
 
-Muốn tái sử dụng trong pipeline VM cần một thí nghiệm migration riêng:
+Notebook đã triển khai đường nạp encoder tương thích, nhưng vẫn cần xác nhận preprocessing/provenance và đánh giá holdout trên VM:
 
 1. Xác minh provenance và preprocessing của checkpoint.
-2. Khôi phục kiến trúc cũ cùng input 10.000 packet, hoặc thiết kế lại encoder/transfer-learning có kiểm soát.
+2. Giữ input `[10000,3]` với `legacy_raw_v1`, padding mask và cùng semantics của time/direction/packet size.
 3. Đánh giá trên validation holdout trước khi dùng cho benchmark/unlearning.
-4. Train MLP classifier mới và lưu checkpoint VM theo format `best_model.pt`.
+4. Train MLP classifier mới bằng `train-base`, lưu cả encoder + MLP trong `best_model.pt`; dùng checkpoint này làm điểm xuất phát chung cho các nhánh unlearning.
 
 Không coi checkpoint này là checkpoint unlearning hoặc binary classifier đã sẵn sàng để deploy.
+
+Mặc định base training chỉ cập nhật MLP; `--fine-tune-encoder` mở cập nhật encoder. Notebook chưa resume optimizer/epoch cho base training hoặc unlearning; khả năng resume SupCon cũ mô tả ở trên không đồng nghĩa với resume các phase mới.
+
+`pretrain_AOL.pth` đã được theo dõi trong Git, chuyển từ folder cũ sang `weight_encoder_trained/` và được đồng bộ qua clone/pull. `pretrain_273.pth` là checkpoint bổ sung hiện có local, chưa được theo dõi; các file `.pth` mới bị ignore theo cấu hình Git. Pipeline mặc định chỉ cần AOL. Sau clone/pull cần xác nhận checkpoint trên VM; notebook không tự tải checkpoint thay thế. Không suy ra encoder chưa từng thấy `Df` hoặc test chỉ từ tên file: cần provenance của pretraining để đánh giá điều đó.
 
 ## Kiểm tra integrity
 

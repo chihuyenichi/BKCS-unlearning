@@ -1,8 +1,10 @@
-# Báo cáo kết quả unlearning trên máy ảo
+# Báo cáo kết quả group-wise unlearning trên máy ảo — lần chạy trước
 
 Nguồn số liệu chính: `MLP-Classfication/vm_code/out_data/vm_outputs.json`.
 
-File `last_run_results_summary.csv` vẫn được giữ lại để tham chiếu lần chạy single-label cũ. Tuy nhiên, báo cáo này ưu tiên kết quả mới trong `vm_outputs.json`, tương ứng với cell cuối của `train_pipeline_vm.ipynb`: chạy nested group-unlearning với số nhãn cần quên lần lượt là `1`, `4`, và `8`.
+File `last_run_results_summary.csv` được giữ để tham chiếu lần chạy single-label cũ hơn. Báo cáo này dựa trên `vm_outputs.json`, tương ứng với cell cuối của notebook hiện được lưu tại [../non-vm-code/train_pipeline_vm.ipynb](../non-vm-code/train_pipeline_vm.ipynb): chạy nested group-unlearning với số nhãn cần quên lần lượt là `1`, `4`, và `8`.
+
+Đây là kết quả của pipeline trước, không phải benchmark của `instance_wise/train_instance_wise.ipynb`. Các path và cấu hình bên dưới mô tả lần chạy lịch sử trên VM. Target unknown ở đây đo hành vi đổi dự đoán; kết quả này chưa chứng minh xóa ảnh hưởng dữ liệu hoặc bảo đảm privacy.
 
 ## 1. Mục tiêu thí nghiệm
 
@@ -93,8 +95,10 @@ Kích thước `Df/Dr`:
 | Forget count | Df train | Dr train | Df val | Dr val | Df test | Dr test |
 |---:|---:|---:|---:|---:|---:|---:|
 | 1 | 85 | 12,574 | 15 | 2,218 | 100 | 14,795 |
-| 4 | 340 | 12,319 | 60 | 2,173 | 400 | 14,495 |
-| 8 | 680 | 11,979 | 120 | 2,113 | 800 | 14,095 |
+| 4 | 296 | 12,363 | 52 | 2,181 | 348 | 14,547 |
+| 8 | 636 | 12,023 | 112 | 2,121 | 748 | 14,147 |
+
+Số lượng được lấy từ dòng `Df/Dr sizes` trong log gốc, không giả định mỗi nhãn đều có đúng 100 mẫu test.
 
 ## 5. Định nghĩa metric
 
@@ -164,22 +168,24 @@ Loss unlearning:
 loss = CE(Df -> unknown) + RETAIN_LOSS_WEIGHT * CE(Dr -> nhãn gốc)
 ```
 
-Với `RETAIN_LOSS_WEIGHT = 1.0`, hai mục tiêu quên và giữ được cân bằng ngang nhau.
+Với `RETAIN_LOSS_WEIGHT = 1.0`, hai thành phần loss có hệ số bằng nhau; đóng góp gradient thực tế vẫn phụ thuộc giá trị loss và batch dữ liệu.
 
 ## 7. Kết quả tổng hợp
 
 Bảng dưới đây tổng hợp mean và standard deviation trên 3 repeat với seed `42`, `43`, `44`.
 
+Forget và retain balanced accuracy dùng dòng aggregate đã in từ full-precision metrics trong log. Retain accuracy được tổng hợp từ log từng repeat đã làm tròn; có thể sai khác nhỏ so với artifact gốc chưa được cung cấp. Standard deviation dùng quy ước population (`ddof=0`) của notebook.
+
 | Forget count | Scope | Df forget trước | Df forget sau mean ± std | Dr bal trước | Dr bal sau mean ± std | Dr acc trước | Dr acc sau mean ± std |
 |---:|---|---:|---:|---:|---:|---:|---:|
 | 1 | `head_only` | 0.4100 | 1.0000 ± 0.0000 | 0.9390 | 0.9474 ± 0.0003 | 0.9545 | 0.9599 ± 0.0005 |
-| 1 | `last_encoder_block` | 0.4100 | 0.9733 ± 0.0125 | 0.9390 | 0.9609 ± 0.0029 | 0.9545 | 0.9702 ± 0.0004 |
-| 1 | `full_encoder_and_head` | 0.4100 | 0.9600 ± 0.0283 | 0.9390 | 0.9601 ± 0.0064 | 0.9545 | 0.9688 ± 0.0033 |
-| 4 | `head_only` | 0.1322 | 0.9952 ± 0.0013 | 0.9367 | 0.9363 ± 0.0038 | 0.9541 | 0.9563 ± 0.0022 |
+| 1 | `last_encoder_block` | 0.4100 | 0.9733 ± 0.0125 | 0.9390 | 0.9608 ± 0.0029 | 0.9545 | 0.9702 ± 0.0004 |
+| 1 | `full_encoder_and_head` | 0.4100 | 0.9600 ± 0.0283 | 0.9390 | 0.9600 ± 0.0064 | 0.9545 | 0.9688 ± 0.0033 |
+| 4 | `head_only` | 0.1322 | 0.9952 ± 0.0014 | 0.9367 | 0.9363 ± 0.0038 | 0.9541 | 0.9563 ± 0.0022 |
 | 4 | `last_encoder_block` | 0.1322 | 0.9895 ± 0.0149 | 0.9367 | 0.9529 ± 0.0112 | 0.9541 | 0.9661 ± 0.0057 |
 | 4 | `full_encoder_and_head` | 0.1322 | 0.9818 ± 0.0098 | 0.9367 | 0.9585 ± 0.0059 | 0.9541 | 0.9699 ± 0.0044 |
 | 8 | `head_only` | 0.1070 | 0.9933 ± 0.0000 | 0.9356 | 0.9397 ± 0.0016 | 0.9552 | 0.9594 ± 0.0009 |
-| 8 | `last_encoder_block` | 0.1070 | 0.9897 ± 0.0023 | 0.9356 | 0.9567 ± 0.0004 | 0.9552 | 0.9699 ± 0.0005 |
+| 8 | `last_encoder_block` | 0.1070 | 0.9898 ± 0.0023 | 0.9356 | 0.9567 ± 0.0004 | 0.9552 | 0.9699 ± 0.0005 |
 | 8 | `full_encoder_and_head` | 0.1070 | 0.9875 ± 0.0035 | 0.9356 | 0.9651 ± 0.0020 | 0.9552 | 0.9751 ± 0.0004 |
 
 ## 8. Phân tích theo số nhãn cần quên
@@ -189,14 +195,14 @@ Bảng dưới đây tổng hợp mean và standard deviation trên 3 repeat v�
 Nhóm cần quên có `100` mẫu test. Trước unlearning, `41%` mẫu trong `Df-test` đã bị dự đoán thành unknown. Sau unlearning:
 
 - `head_only` đạt `forget_rate = 1.0000`, cao nhất và rất ổn định.
-- `last_encoder_block` đạt `forget_rate = 0.9733`, nhưng giữ `Dr` tốt hơn với `retain_bal = 0.9609`.
+- `last_encoder_block` đạt `forget_rate = 0.9733`, nhưng giữ `Dr` tốt hơn với `retain_bal = 0.9608`.
 - `full_encoder_and_head` đạt `forget_rate = 0.9600`, thấp hơn hai baseline còn lại và dao động lớn hơn.
 
 Nếu ưu tiên quên tuyệt đối cho 1 nhãn, `head_only` là tốt nhất. Nếu ưu tiên cân bằng giữa quên và giữ lại, `last_encoder_block` hợp lý hơn.
 
 ### Quên 4 nhãn
 
-Nhóm cần quên có `400` mẫu test. Trước unlearning, `Df-test forget_rate = 0.1322`. Sau unlearning:
+Nhóm cần quên có `348` mẫu test. Trước unlearning, `Df-test forget_rate = 0.1322`. Sau unlearning:
 
 - `head_only` vẫn quên rất mạnh với `forget_rate = 0.9952`, nhưng `retain_bal` hầu như không cải thiện so với trước.
 - `last_encoder_block` đạt `forget_rate = 0.9895`, và `retain_bal` tăng lên `0.9529`.
@@ -206,10 +212,10 @@ Khi số nhãn cần quên tăng lên 4, việc cho phép encoder cập nhật b
 
 ### Quên 8 nhãn
 
-Nhóm cần quên có `800` mẫu test. Trước unlearning, `Df-test forget_rate = 0.1070`. Sau unlearning:
+Nhóm cần quên có `748` mẫu test. Trước unlearning, `Df-test forget_rate = 0.1070`. Sau unlearning:
 
 - `head_only` đạt `forget_rate = 0.9933`, gần như hoàn hảo, nhưng `retain_bal = 0.9397` thấp hơn rõ so với hai baseline có cập nhật encoder.
-- `last_encoder_block` đạt `forget_rate = 0.9897`, `retain_bal = 0.9567`.
+- `last_encoder_block` đạt `forget_rate = 0.9898`, `retain_bal = 0.9567`.
 - `full_encoder_and_head` đạt `forget_rate = 0.9875`, `retain_bal = 0.9651`, `retain_acc = 0.9751`.
 
 Với 8 nhãn, `full_encoder_and_head` là baseline giữ lại `Dr` tốt nhất, trong khi vẫn đạt mức quên rất cao trên `Df`.
@@ -248,11 +254,11 @@ Nếu chọn baseline theo mục tiêu:
 - Mục tiêu cân bằng và can thiệp vừa phải: chọn `last_encoder_block`.
 - Mục tiêu giữ performance trên `Dr` tốt nhất khi quên nhiều nhãn: chọn `full_encoder_and_head`.
 
-Với kết quả hiện tại, khuyến nghị dùng `last_encoder_block` làm baseline chính để so sánh trong báo cáo khoa học, vì nó cân bằng giữa tính ổn định, khả năng quên, và mức độ can thiệp vào encoder. Với riêng kịch bản quên 8 nhãn, nên báo cáo thêm `full_encoder_and_head` như baseline tốt nhất về retain performance.
+Trong lần chạy này, `last_encoder_block` là một cấu hình tham khảo để cân bằng quên/giữ; kịch bản quên 8 nhãn nên báo cáo thêm `full_encoder_and_head` vì retain performance tốt hơn. Mốc baseline trước unlearning vẫn là model gốc encoder + MLP. Ba scope cùng dùng một objective CE, không phải ba method unlearning độc lập. Chưa suy ra lựa chọn tối ưu cho instance-wise hoặc xếp hạng method mới từ báo cáo này.
 
 ## 11. Lưu ý về resume và artifact
 
-Base model đã có cơ chế reuse:
+Trong pipeline trước, base model đã có cơ chế reuse:
 
 ```text
 base_model/best_model.pt

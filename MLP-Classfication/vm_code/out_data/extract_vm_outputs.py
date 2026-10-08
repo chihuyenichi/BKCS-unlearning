@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
-"""Extract cell outputs from train_pipeline_vm.ipynb into a JSON file.
+"""Extract saved cell outputs without executing a notebook.
 
 Default paths are resolved relative to this script, so it works
 regardless of the current working directory:
 
-    notebook -> ../train_pipeline_vm.ipynb
-    output   -> ./vm_outputs.json  (same folder as this script)
+    notebook -> ../instance_wise/train_instance_wise.ipynb
+    output   -> <repo>/artifacts/vm-training/instance-wise/notebook_outputs.json
+
+Historical out_data/vm_outputs.json is preserved by the default configuration.
 
 Usage:
     python3 extract_vm_outputs.py
-    python3 extract_vm_outputs.py --notebook /path/to/train_pipeline_vm.ipynb --output /path/to/vm_outputs.json
+    python3 extract_vm_outputs.py --notebook /path/to/notebook.ipynb --output /path/to/outputs.json
 """
 
 from __future__ import annotations
@@ -89,16 +91,18 @@ def extract_outputs(notebook_path: Path) -> dict:
 
 def main() -> None:
     script_dir = Path(__file__).resolve().parent
-    default_notebook = script_dir.parent / "train_pipeline_vm.ipynb"
-    default_output = script_dir / "vm_outputs.json"
+    vm_code_dir = script_dir.parent
+    repo_root = vm_code_dir.parent.parent
+    default_notebook = vm_code_dir / "instance_wise" / "train_instance_wise.ipynb"
+    default_output = repo_root / "artifacts/vm-training/instance-wise/notebook_outputs.json"
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--notebook", default=str(default_notebook))
     parser.add_argument("--output", default=str(default_output))
     args = parser.parse_args()
 
-    notebook_path = Path(args.notebook)
-    output_path = Path(args.output)
+    notebook_path = Path(args.notebook).expanduser().resolve()
+    output_path = Path(args.output).expanduser().resolve()
     if not notebook_path.is_file():
         raise FileNotFoundError(f"Không tìm thấy notebook: {notebook_path}")
 
@@ -107,6 +111,8 @@ def main() -> None:
     output_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"Notebook: {notebook_path}")
     print(f"Code cells: {result['code_cells']}, cells with outputs: {result['cells_with_outputs']}")
+    if result["cells_with_outputs"] == 0:
+        print("Notebook chưa có output đã lưu; script này không thực thi notebook hoặc kiểm tra trạng thái VM.")
     print(f"Saved JSON outputs to {output_path}")
 
 

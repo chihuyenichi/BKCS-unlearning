@@ -9,6 +9,24 @@ icloud_100 -> unknown -> binary label 1
 
 Mục tiêu chính: khi nhận một danh sách instance AOL cần quên (`Df`), model sau unlearning phải dự đoán các instance đó thành `unknown`, trong khi giữ hành vi trên phần dữ liệu còn lại gần nhất có thể với base model và retrain oracle.
 
+## Trạng thái implementation đã rà soát
+
+Notebook chính là [train_instance_wise.ipynb](train_instance_wise.ipynb), chạy full experiment trên VM với CSV local. [README vận hành](../README.md) mô tả cấu hình và cách chạy hiện tại.
+
+| Hạng mục | Trạng thái code hiện tại |
+| --- | --- |
+| Paths/runtime | Hai dataset VM đã cấu hình; repo root tự xác định từ working directory hoặc `BKCS_REPO_ROOT`; checkpoint ở `weight_encoder_trained/`. |
+| Parser và instance identity | Byte-offset index, row SHA-256, input `[10000,3]`, mask theo packet size và split deterministic đã có. |
+| Base model | `train-base` load encoder pretrained, mặc định freeze encoder và train binary MLP; lưu toàn bộ encoder + classifier. |
+| Forget manifests | `make-manifests` chọn nested AOL base-train instances đang được dự đoán đúng là known. |
+| Unlearning | Đã có 5 method `relabel_only`, `retain_rehearsal`, `l2ul_mas`, `l2ul_adv`, `l2ul_adv_mas`, 3 update scope và repeat loop. |
+| Đánh giá | Đã có forget before/after, retain validation/test theo slice và confusion matrix. Unlearning lưu epoch cuối. |
+| Resume | Reuse index/feature/adversarial cache và nạp base checkpoint đã có; resume optimizer/epoch và skip nhánh hoàn thành chưa có. |
+| Còn dự kiến | Retrain oracle, command `train-oracle`/`summarize`, tổng hợp mean/std tự động, artifact README riêng và targeted Blindspot. |
+| Kết quả trên VM | Cần đọc artifact của lần chạy thực tế; notebook repo chưa chứa output đã lưu, không suy ra trạng thái VM từ đó. |
+
+Các phase, checklist và acceptance criteria bên dưới là **đặc tả đích**. Checklist chưa đánh dấu không có nghĩa mọi hàm tương ứng còn thiếu; chỉ đánh dấu hoàn tất khi đã xác nhận implementation và verification cần thiết. Các kết quả trong `../out_data/` thuộc group-wise workflow trước, không xác nhận benchmark instance-wise.
+
 ---
 
 ## 1. Kết quả cần đạt
@@ -23,29 +41,33 @@ Sau khi hoàn thành plan, repository cần có một notebook/pipeline có th�
 6. Đánh giá forget, retain, collateral damage và oracle distance.
 7. Lưu artifact đủ để tái lập experiment.
 
-Output chính:
+Output hiện có theo cell cấu hình notebook:
 
 ```text
 artifacts/vm-training/instance-wise/
+├── csv_index.json
+├── feature_cache/
 ├── base_run/
-│   ├── base_model/best_model.pt
 │   ├── split_manifest.json
-│   └── dataset_signatures.json
-├── forget_manifests/
-│   ├── forget_1.json
-│   ├── forget_10.json
-│   ├── forget_50.json
-│   └── forget_100.json
-└── unlearning_runs/
-    └── <forget_count>/<method>/<scope>/repeat_<seed>/
-        ├── unlearned_model.pt
-        ├── result.json
-        ├── history.json
-        ├── config.json
-        ├── mas_importance.pt
-        ├── adversarial_manifest.json
-        └── README.md
+│   ├── base_model/
+│   │   ├── best_model.pt
+│   │   └── result.json
+│   └── instance_unlearning/
+│       └── <forget_manifest_stem>/
+│           ├── summary.json
+│           ├── adversarial_cache/        # khi chạy Adv
+│           └── <method>/<scope>/repeat_<r>/
+│               ├── unlearned_model.pt
+│               ├── result.json           # bao gồm history
+│               └── mas_anchors.pt        # khi chạy MAS
+└── forget_manifests/
+    ├── forget_1.json
+    ├── forget_10.json
+    ├── forget_50.json
+    └── forget_100.json
 ```
+
+Paths mặc định được neo vào repo root. Dataset signatures nằm trong index/split manifest/checkpoint, history nằm trong result; các file riêng `dataset_signatures.json`, `history.json`, `config.json`, importance/manifest/README theo từng run vẫn là yêu cầu mở rộng, chưa phải toàn bộ output hiện có.
 
 ---
 
@@ -61,6 +83,7 @@ artifacts/vm-training/instance-wise/
 | Base checkpoint | Mọi nhánh unlearning bắt đầu độc lập từ cùng `base_model/best_model.pt`. |
 | Threshold | Giữ `best_unknown_threshold` của base model, không chọn lại sau unlearning. |
 | Loss | Loss là objective dùng để backprop và cập nhật trọng số, không chỉ là metric mô tả. |
+| Base training | Mặc định freeze encoder pretrained, train MLP; `--fine-tune-encoder` là cấu hình tùy chọn. |
 | Strict L2UL | Các mode `l2ul_*` không dùng `Dr` trong loss unlearning. |
 | Baseline có `Dr` | `retain_rehearsal` được phép dùng `Dr`, nhưng phải báo cáo tách biệt. |
 | Ưu tiên triển khai | `relabel_only` -> `retain_rehearsal` -> `l2ul_mas` -> `l2ul_adv` -> `l2ul_adv_mas`. |
@@ -183,8 +206,8 @@ CSV row / traffic instance [10000, 3]
 Checkpoint SupCon hiện có:
 
 ```text
-MLP-Classfication/vm_code/weight_trained/pretrain_AOL.pth
-MLP-Classfication/vm_code/weight_trained/pretrain_273.pth
+MLP-Classfication/vm_code/weight_encoder_trained/pretrain_AOL.pth
+MLP-Classfication/vm_code/weight_encoder_trained/pretrain_273.pth
 ```
 
 Các checkpoint này chứa encoder/projection head SupCon, không chứa binary MLP. Pipeline chính dùng:
@@ -196,17 +219,21 @@ pretrain_AOL.pth
 -> lưu base_model/best_model.pt
 ```
 
-`best_model.pt` bắt buộc chứa:
+`best_model.pt` hiện chứa:
 
 ```text
 model_state_dict
 best_unknown_threshold
-split_manifest hash
+unknown_threshold
+split_ids
 dataset signatures
-pretrain checkpoint hash
+pretrain metadata / checkpoint hash
 model/feature config
-base validation/test metrics
+seed / valid_ratio
+base test metrics
 ```
+
+Validation history và threshold sweep nằm trong `base_model/result.json`. Hash riêng của split manifest và base validation metrics trong checkpoint là yêu cầu có thể bổ sung, không phải khóa đã lưu hiện tại.
 
 Mọi method/scope/repeat của unlearning phải reload độc lập từ checkpoint này.
 
@@ -318,6 +345,8 @@ Output:
 artifacts/.../schema_validation.json
 ```
 
+Đây là artifact dự kiến; command `validate-schema` hiện in JSON ra output notebook, chưa tự lưu file `schema_validation.json`.
+
 ### Phase 1 - Base training
 
 Mục tiêu: tạo base binary checkpoint dùng chung cho mọi nhánh unlearning.
@@ -337,10 +366,11 @@ Output:
 
 ```text
 base_model/best_model.pt
+base_model/result.json
 split_manifest.json
-dataset_signatures.json
-base_metrics.json
 ```
+
+Dataset signatures được nhúng trong manifest/checkpoint, base test metrics và lịch sử nằm trong result. Không cần tìm `dataset_signatures.json`/`base_metrics.json` riêng trong implementation hiện tại.
 
 ### Phase 2 - Forget manifest generation
 
@@ -465,6 +495,8 @@ base train oracle = Dr_train
 
 Oracle không phải method nhanh, mà là mốc để so sánh.
 
+Loại `Df` khỏi training không bảo đảm oracle dự đoán các instance đó thành unknown. Đây là mốc cho mục tiêu loại ảnh hưởng dữ liệu, cần phân biệt với yêu cầu đổi output sang unknown. Nếu reuse encoder pretrained đã từng thấy `Df`, oracle chỉ là retrain classifier có điều kiện trên encoder đó; phải kiểm tra provenance trước khi diễn giải thành model chưa từng thấy `Df`.
+
 ### 8.3. Relabel-only
 
 Targeted relabeling đơn giản:
@@ -494,6 +526,8 @@ Omega_i = (1 / |Df|) * sum_x | d ||f_theta_0(x)||_2 / d theta_i |
 ```
 
 Implementation đầu tiên dùng logits binary làm `f_theta_0(x)`. Nếu dùng embedding, phải đặt tên ablation riêng.
+
+Code hiện dùng trị tuyệt đối của gradient norm tổng trên mini-batch rồi chia tổng số mẫu. Đây là ước lượng theo batch, có thể khác trung bình trị tuyệt đối gradient từng instance trong công thức trên do triệt tiêu gradient; chưa coi hai cách là tương đương chính xác.
 
 Chuẩn hóa theo từng parameter tensor:
 
@@ -575,17 +609,19 @@ direction:
     giữ nguyên, không perturb biến rời rạc
 
 relative_time:
-    perturb nhỏ trong scaled space
+    perturb nhỏ trong raw CSV feature space
     clamp không âm
     giữ quy tắc preprocessing
 
 packet_size:
-    perturb nhỏ trong scaled space
+    perturb nhỏ trong raw CSV feature space
     clamp vào miền kích thước hợp lệ
     tùy config có thể round về số nguyên
 ```
 
 Milestone an toàn: triển khai và benchmark `l2ul_mas` trước, sau đó mới bật constrained PGD.
+
+PGD hiện perturb trực tiếp `legacy_raw_v1`: epsilon time mặc định `0.005`, epsilon packet size `8.0`. Không có bước scale channel ngầm; các bound cần được xác nhận theo semantics của CSV. Code giữ direction/padding, timestamp đầu, ràng buộc timestamp không giảm và packet size hợp lệ.
 
 ---
 
@@ -806,16 +842,18 @@ Khi muốn chạy, review config rồi đặt:
 RUN_PIPELINE = True
 ```
 
-Các command dự kiến:
+Command hiện có và command dự kiến:
 
-| Command | Mục đích | Môi trường |
-| --- | --- | --- |
-| `validate-schema` | Kiểm tra parser/index với CSV sample | Máy cá nhân |
-| `train-base` | Train base binary model | VM |
-| `make-manifests` | Tạo nested forget manifests | VM |
-| `unlearn` | Chạy unlearning grid | VM |
-| `train-oracle` | Train retrain oracle | VM |
-| `summarize` | Tổng hợp benchmark | Máy cá nhân hoặc VM |
+| Command | Mục đích | Môi trường | Trạng thái |
+| --- | --- | --- | --- |
+| `validate-schema` | Kiểm tra schema CSV sample | Máy cá nhân; VM nếu đã có sample | Đã có |
+| `train-base` | Train base binary model | VM | Đã có |
+| `make-manifests` | Tạo nested forget manifests | VM | Đã có |
+| `unlearn` | Chạy unlearning grid cho một manifest | VM | Đã có |
+| `train-oracle` | Train retrain oracle | VM | Chưa triển khai |
+| `summarize` | Tổng hợp benchmark | Máy cá nhân hoặc VM | Chưa triển khai |
+
+Cấu hình notebook mặc định `RUN_PIPELINE=False` và `validate-schema`. Khi train trên VM, chọn `train-base`, bật `RUN_PIPELINE`, chạy cell cấu hình rồi cell execute. `unlearn` mặc định chỉ dùng `forget_10.json`; các count khác phải đổi manifest và chạy riêng.
 
 Mapping code dự kiến:
 
@@ -874,8 +912,7 @@ Notebook chỉ dùng Python standard library, NumPy và PyTorch. Full training/u
 2. Có manifest nào ánh xạ CSV row về PCAP gốc không?
 3. Quy mô `Df` có giữ `(1, 10, 50, 100)` hay cần thêm theo tỷ lệ phần trăm?
 4. Strict experiment có cấm dùng `Dr` cả trong model selection/early stopping không, hay chỉ cấm trong loss?
-5. Base training phase sẽ freeze encoder hay fine-tune encoder cùng MLP?
-6. Với retrain oracle, có train full encoder+MLP hay chỉ train cùng cấu hình base hiện tại?
+5. Khi triển khai oracle, giữ cùng cấu hình base đã chọn; nếu cần oracle full encoder+MLP hoặc encoder pretrain loại `Df`, báo cáo như một protocol riêng và xác minh provenance.
 
 ---
 
