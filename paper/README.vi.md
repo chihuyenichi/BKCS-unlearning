@@ -27,7 +27,7 @@ Do đó, accuracy trên `D_f` giảm không tự nó đủ chứng minh unlearni
 
 ## Liên hệ nhanh với dự án PCAP
 
-`MLP-Classfication/code/train_pipeline.ipynb` hiện phù hợp nhất với setting **có thể truy cập `D_f` và một phần/toàn bộ `D_r`**. Đây không phải zero-shot setting. Với multiclass, cần phân biệt rõ:
+Các pipeline trong [`experiments/`](../experiments/README.md) hiện phù hợp nhất với setting **có thể truy cập `D_f` và một phần/toàn bộ `D_r`**. Đây không phải zero-shot setting. Với multiclass, cần phân biệt rõ:
 
 - *class-level unlearning*: xóa mọi PCAP của một hoặc nhiều label;
 - *instance/cohort-level unlearning*: xóa một nhóm file PCAP cụ thể, kể cả khi chúng thuộc nhiều label;

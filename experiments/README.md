@@ -152,3 +152,19 @@ giảm dung lượng.
 - Chỉ nhánh VM giữ checkpoint local trong `virtual-machine/weights/`.
 - Báo cáo hiện có trong `kaggle/results/` là kết quả Kaggle, không phải kết quả
   VM.
+
+## Hard-example correction
+
+Bài toán khác với unlearning: **không đổi ground-truth**, chỉ tìm các mẫu train đang bị đoán sai và
+fine-tune MLP để sửa chúng mà hạn chế làm hỏng các mẫu vốn đã đúng. Test split không bao giờ được dùng
+để train, chọn ngưỡng hay chọn model.
+
+| Thư mục | Known (`0`) / Unknown (`1`) | Ghi chú |
+|---|---|---|
+| `hard-example-correction/aol-vs-top100/` | AOL / `icloud_100` | Pipeline gốc: baseline, uniform fine-tune, hard-weighted CE, + Center, + MK-MMD. Đặc tả trong `PLAN.md`. |
+| `hard-example-correction/swizerland-vs-masque500/` | Swizerland / masque_500 | Cùng pipeline, thêm `train_encoder*.py` (SupCon) và các biến thể trong `experiments/` (head sweep, SAM, unfreeze). Kết quả tốt nhất hiện có và so sánh ghép cặp theo seed nằm trong `REPORT_encoder_v2_fc.md`. |
+
+Mỗi thư mục có `pipeline.py` và `pipeline.ipynb` giữ đồng bộ nội dung; `.py` là nguồn chuẩn. Báo cáo XLSX đã chọn lọc
+nằm ở `results/`; output thô (`outputs/`) bị gitignore. Tên thư mục output trong code (ví dụ
+`son-tung-binary-hard-example`) là tên thư mục trên Kaggle và được giữ nguyên để khớp với artifact đã chạy.
+
