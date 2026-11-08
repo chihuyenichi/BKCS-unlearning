@@ -53,9 +53,9 @@ Instance-wise unlearning: quên Df, giữ Dr
 
 Bài toán hiện tại:
 
-- Input là raw network flow dạng `.pcap`.
-- Mỗi file PCAP đang được xem là một sample.
-- Parser chuyển mỗi PCAP thành tensor packet features.
+- Input hiện hành là processed traffic CSV; mỗi dòng vật lý là một instance.
+- Mỗi dòng chứa tối đa 10.000 packet record đã padding.
+- Parser giữ ba feature `relative_time`, `direction`, `packet_size`.
 - Encoder học vector đặc trưng 256 chiều từ chuỗi packet.
 - MLP phân loại binary thành `known` hoặc `unknown`.
 - Sau khi classifier ổn định, áp dụng instance-wise unlearning để quên một tập mẫu `Df` nhưng vẫn giữ hiệu năng trên `Dr`.
@@ -67,49 +67,39 @@ Bài toán hiện tại:
 ```text
 unlearning/
 ├── README.md
-├── paper/
-│   ├── Instance-Wise Unlearning.pdf
-│   ├── Instance-Wise Unlearning.md
-│   ├── Chundawat et al. - 2023 - Zero-Shot Machine Unlearning.pdf
-│   └── zero retrain.pdf
-├── scripts/
-│   ├── colab_sync_project.sh
-│   ├── colab_run_notebook.sh
-│   └── normalize_pcap_dataset.py
-└── MLP-Classfication/
-    ├── plan.md
-    ├── results.md
-    ├── requirements.txt
-    ├── train_pipeline.py
-    ├── code/
-    │   ├── CHI.md
-    │   ├── RUN_LOG.md
-    │   ├── export_notebook_outputs.py
-    │   ├── normalize_pcap_dataset.ipynb
-    │   ├── supcon-model.ipynb
-    │   └── train_pipeline.ipynb
-    └── vm_code/
-        ├── plan_demo.md
-        ├── README.md
-        └── train_pipeline_vm.ipynb
+├── paper/                              # paper nền + bản tóm tắt tiếng Việt
+├── experiments/                        # toàn bộ code thí nghiệm (xem experiments/README.md)
+│   ├── instance-wise-unlearning/
+│   │   ├── kaggle/                     # benchmark 12 mode trên Kaggle
+│   │   └── virtual-machine/            # cùng protocol, chạy VM với dataset local
+│   └── hard-example-correction/
+│       ├── aol-vs-top100/              # AOL vs 100 Top Search
+│       └── swizerland-vs-masque500/    # Swizerland vs masque_500 (+ train encoder riêng)
+├── reference/
+│   └── unlearning-kf.ipynb             # notebook SupCon/unlearning gốc dùng làm tham chiếu
+├── scripts/                            # tiện ích Colab + chuẩn hóa PCAP
+├── docs/
+│   ├── images/                         # ảnh minh họa dùng trong tài liệu
+│   └── notes/ME.txt                    # ghi chú cá nhân
+├── data/                               # (gitignore) dataset CSV, file tải từ Drive
+└── artifacts/                          # (gitignore) cache, archive workspace cũ
 ```
 
 Ý nghĩa chính:
 
 - `paper/`: tài liệu nền về unlearning.
 - `paper/Instance-Wise Unlearning.md`: bản viết lại ngắn gọn bằng tiếng Việt từ paper chính.
-- `MLP-Classfication/plan.md`: mô tả bài toán, giả định, pipeline, known/unknown, Df/Dr và hướng đánh giá.
-- `MLP-Classfication/results.md`: báo cáo kết quả chạy hiện tại, gồm môi trường, dataset, cấu hình, metric validation/test, nhận xét và kết luận.
-- `MLP-Classfication/code/train_pipeline.ipynb`: notebook chính, chạy được trong VS Code/local hoặc Google Colab.
-- `MLP-Classfication/code/CHI.md`: danh sách overview của từng code cell; cần cập nhật khi thêm/xóa/sửa cell.
-- `MLP-Classfication/train_pipeline.py`: bản CLI tương ứng với notebook.
-- `MLP-Classfication/code/export_notebook_outputs.py`: xuất output của notebook sang Markdown để AI/người đọc nhanh.
-- `MLP-Classfication/code/RUN_LOG.md`: log notebook đã export gần nhất.
-- `MLP-Classfication/code/supcon-model.ipynb`: notebook cũ để tham khảo hướng SupCon/embedding.
-- `scripts/colab_sync_project.sh`: đóng gói project local, upload lên Colab VM và giải nén thành folder remote.
-- `scripts/colab_run_notebook.sh`: chạy notebook chính trong folder remote trên Colab bằng Colab CLI.
-- `scripts/normalize_pcap_dataset.py` và `code/normalize_pcap_dataset.ipynb`: chuẩn hóa một dataset PCAP thành artifact shard tái sử dụng.
-- `MLP-Classfication/vm_code/train_pipeline_vm.ipynb`: pipeline train Drive-first cho VM GPU; cache, checkpoint và summary đều nằm trên Drive.
+- `experiments/README.md`: bản đồ các thí nghiệm, cách chạy, quy tắc đồng bộ Kaggle/VM.
+- `experiments/instance-wise-unlearning/kaggle/`: pipeline và báo cáo (`results/`) chạy trên Kaggle.
+- `experiments/instance-wise-unlearning/virtual-machine/`: cùng protocol nhưng dùng dataset/checkpoint local trên VM.
+- `experiments/hard-example-correction/`: thí nghiệm sửa mẫu bị đoán sai (không phải unlearning), mỗi bộ dữ liệu một thư mục.
+- `scripts/colab_sync_project.sh`, `scripts/colab_run_notebook.sh`: tiện ích Colab cho pipeline cũ (xem ghi chú bên dưới).
+- `scripts/normalize_pcap_dataset.py`: chuẩn hóa một dataset PCAP thành artifact shard tái sử dụng.
+
+> **Lưu ý:** các mục 3–16 bên dưới mô tả pipeline `MLP-Classfication/code/` giai đoạn đầu. Code đó
+> đã được lưu trữ khỏi cây thư mục hiện tại (vẫn truy cập được qua lịch sử Git, ví dụ commit
+> `e48b0c0`), nên các đường dẫn `MLP-Classfication/...` trong những mục đó chỉ còn giá trị tham khảo.
+> Pipeline đang dùng là mục 17.
 
 ## 3. Dữ liệu Google Drive
 
@@ -859,17 +849,11 @@ Chỉ dùng `--overwrite` khi chủ động tạo lại toàn bộ artifact. Th�
 7. Nếu cần đánh giá open-world nghiêm ngặt, tách riêng `unknown-calibration` và `unknown-final-test`.
 8. Khi `balanced_accuracy` và `unknown_recall` ổn định hơn, tạo `Df` ở cấp instance và chạy unlearning.
 
-## 17. Chạy train trên VM với Drive
+## 17. Chạy benchmark hiện hành
 
-Notebook [MLP-Classfication/vm_code/train_pipeline_vm.ipynb](MLP-Classfication/vm_code/train_pipeline_vm.ipynb) chạy cùng pipeline `[256,3]` + SupCon + MLP trên CPU/GPU của VM, trong khi Google Drive là workspace lưu trữ duy nhất.
+Hai notebook hiện hành dùng cùng model, method, hyperparameter và schema output:
 
-Cell đầu mount Drive và đặt các path đã chốt:
+- [Kaggle pipeline](experiments/instance-wise-unlearning/kaggle/pipeline.ipynb) resolve dataset dưới `/kaggle/input` và ghi vào `/kaggle/working/bkcs-unlearning`.
+- [VM pipeline](experiments/instance-wise-unlearning/virtual-machine/pipeline.ipynb) dùng dataset local và ghi vào `<repo>/artifacts/vm-training/instance-wise`.
 
-```text
-data   = /content/drive/MyDrive/Traffic FingerPrinting /Data/273 (lan 1)
-output = /content/drive/MyDrive/unlearning-artifacts/vm-training/experiments/<RUN_ID>
-```
-
-Notebook đặt `RUN_CONTEXT='local'` để không chạy auto-mount của pipeline gốc, còn `DEVICE_NAME='cuda:0'` dùng GPU của VM. Cần chạy cell theo thứ tự: mount/config Drive → dependency → config pipeline → preflight → parser/train/evaluate. Preflight bắt buộc Drive mount đúng, dataset có PCAP, output ghi được và CUDA GPU sẵn sàng trước khi cache/train bắt đầu.
-
-Mỗi VM hoặc experiment phải đổi `RUN_ID`, vì cache PCAP, checkpoint và summary của một run không được ghi chung với run khác. Raw PCAP có thể dùng chung chỉ-đọc; không chạy đồng thời hai VM vào cùng `OUTPUT_DIR`. Hướng dẫn vận hành chi tiết nằm trong [MLP-Classfication/vm_code/README.md](MLP-Classfication/vm_code/README.md); kế hoạch/tiêu chí quick run nằm trong [MLP-Classfication/vm_code/plan_demo.md](MLP-Classfication/vm_code/plan_demo.md).
+Mặc định benchmark quên một instance (`FORGET_COUNT = 1`) và chạy ba repeat cho mỗi non-baseline mode. Hướng dẫn vận hành, output và báo cáo nằm trong [workspace README](experiments/README.md); đặc tả đầy đủ nằm trong [Kaggle plan](experiments/instance-wise-unlearning/kaggle/PLAN.md) và [VM plan](experiments/instance-wise-unlearning/virtual-machine/PLAN.md).

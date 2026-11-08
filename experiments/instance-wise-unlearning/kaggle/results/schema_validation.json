@@ -1,0 +1,124 @@
+{
+  "platform": "kaggle",
+  "input_root": "/kaggle/input",
+  "output_root": "/kaggle/working/bkcs-unlearning",
+  "known_aol": {
+    "dataset_dir": "/kaggle/input/datasets/linhhphng/aol-csv/AOL_csv/icloud",
+    "mapping_count": 50,
+    "label_zero": "label_0",
+    "files": {
+      "train_data.csv": {
+        "bytes": 986316103,
+        "inspected": [
+          {
+            "line_number": 1,
+            "byte_offset": 0,
+            "label_id": 0,
+            "label_name": "label_0",
+            "values": 40000,
+            "real_packets": 718,
+            "padding_packets": 9282,
+            "row_sha256": "d1e1e522327bbe4c169b69b6a570af8b629db669d0fc46da81bb9d809076f796"
+          },
+          {
+            "line_number": 2,
+            "byte_offset": 171807,
+            "label_id": 0,
+            "label_name": "label_0",
+            "values": 40000,
+            "real_packets": 712,
+            "padding_packets": 9288,
+            "row_sha256": "8b79b76d362465cfbcb73378d3946629e38b4ca2474568ec5f7926099c5e2985"
+          }
+        ]
+      },
+      "test_data.csv": {
+        "bytes": 987328213,
+        "inspected": [
+          {
+            "line_number": 1,
+            "byte_offset": 0,
+            "label_id": 0,
+            "label_name": "label_0",
+            "values": 40000,
+            "real_packets": 793,
+            "padding_packets": 9207,
+            "row_sha256": "9bde981819f74b4ae102bcf47c54eab2a42569cf106bd1dcd97bcc7228181690"
+          },
+          {
+            "line_number": 2,
+            "byte_offset": 173078,
+            "label_id": 0,
+            "label_name": "label_0",
+            "values": 40000,
+            "real_packets": 4897,
+            "padding_packets": 5103,
+            "row_sha256": "f2522d96785ee1568bd9dc8b214ad8ce286d40200b992209a12e246513be9972"
+          }
+        ]
+      }
+    }
+  },
+  "unknown_100_topsearch": {
+    "dataset_dir": "/kaggle/input/datasets/linhhphng/100-topsearch/100-topsearch/icloud_100",
+    "mapping_count": 100,
+    "label_zero": "label_0",
+    "files": {
+      "train_data.csv": {
+        "bytes": 1950331232,
+        "inspected": [
+          {
+            "line_number": 1,
+            "byte_offset": 0,
+            "label_id": 0,
+            "label_name": "label_0",
+            "values": 40000,
+            "real_packets": 2320,
+            "padding_packets": 7680,
+            "row_sha256": "1fc8875ff9a68d94727d1be45f67662199debc794bacd9928886ace97d1743a5"
+          },
+          {
+            "line_number": 2,
+            "byte_offset": 198511,
+            "label_id": 0,
+            "label_name": "label_0",
+            "values": 40000,
+            "real_packets": 2578,
+            "padding_packets": 7422,
+            "row_sha256": "34a98d8a03207d1b8f5fab42d0e826149ce1f18dc1d7bd849c1e415494396e6c"
+          }
+        ]
+      },
+      "test_data.csv": {
+        "bytes": 1949354041,
+        "inspected": [
+          {
+            "line_number": 1,
+            "byte_offset": 0,
+            "label_id": 0,
+            "label_name": "label_0",
+            "values": 40000,
+            "real_packets": 2469,
+            "padding_packets": 7531,
+            "row_sha256": "111d91e7dc4ffa7486098c42cf08bcfab0c48f84484ae5b159af14db9a8339c9"
+          },
+          {
+            "line_number": 2,
+            "byte_offset": 200911,
+            "label_id": 0,
+            "label_name": "label_0",
+            "values": 40000,
+            "real_packets": 2757,
+            "padding_packets": 7243,
+            "row_sha256": "6446081fb1dff8658a18bda89521d53976b97fdee7fe66b1dabe4e999183836e"
+          }
+        ]
+      }
+    }
+  },
+  "pretrained_encoder": {
+    "path": "/kaggle/input/datasets/daohuyenchi21/weight-encoder-trained/pretrain_AOL.pth",
+    "bytes": 30144159,
+    "sha256": "84bcd55ffcab5b44d09d04131f9a7e81e593565b035cd969d5a73b5671b1cd7a"
+  }
+}

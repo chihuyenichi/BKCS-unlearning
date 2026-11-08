@@ -38,3 +38,12 @@ checkpoints/
 *.tar
 *.tar.gz
 *.tgz
+
+# Local datasets (extracted CSVs, Drive downloads) - tens of GB, never commit
+data/
+
+# Codex scratch
+.codex-tmp/
+
+# Keep the one pretrained encoder the VM pipeline needs (30 MB)
+!experiments/instance-wise-unlearning/virtual-machine/weights/pretrain_AOL.pth
